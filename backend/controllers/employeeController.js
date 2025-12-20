@@ -32,34 +32,58 @@ export const getAllEmployees = async (req, res) => {
     // Connect to school database
     connection = await getSchoolConnection(schoolDbConfig);
 
-    // Get all employees with their user type
+    // Get all employees from teacher table with user type from users table
     const [employees] = await connection.query(`
       SELECT
-        u.id,
-        u.name,
+        COALESCE(u.id, t.userid) as id,
+        t.id as teacher_id,
+        t.userid,
+        t.lastname,
+        t.firstname,
+        t.middlename,
+        TRIM(CONCAT_WS(' ', t.lastname, t.firstname, t.middlename)) as name,
         u.email,
         u.type as usertype_id,
         ut.utype as usertype_name,
         u.created_at,
         u.updated_at
-      FROM users u
+      FROM teacher t
+      LEFT JOIN users u ON u.id = t.userid
       LEFT JOIN usertype ut ON u.type = ut.id
-      WHERE u.deleted = 0
-      ORDER BY u.name ASC
+      WHERE t.deleted = 0 AND (u.deleted = 0 OR u.deleted IS NULL)
+      ORDER BY t.lastname ASC, t.firstname ASC, t.middlename ASC
     `);
 
-    // Get additional user types from faspriv for each employee
-    for (let employee of employees) {
-      const [additionalTypes] = await connection.query(`
+    // Get additional user types from faspriv for all employees (by userid)
+    const userIds = employees
+      .map((employee) => employee.userid)
+      .filter((value) => value !== null && value !== undefined);
+
+    const additionalTypesByUserId = new Map();
+
+    if (userIds.length > 0) {
+      const [additionalTypeRows] = await connection.query(`
         SELECT
+          fp.userid,
           fp.usertype,
           ut.utype as usertype_name
         FROM faspriv fp
         LEFT JOIN usertype ut ON fp.usertype = ut.id
-        WHERE fp.userid = ? AND fp.deleted = 0
-      `, [employee.id]);
+        WHERE fp.deleted = 0 AND fp.userid IN (?)
+      `, [userIds]);
 
-      employee.additional_types = additionalTypes;
+      for (const row of additionalTypeRows) {
+        const key = String(row.userid);
+        if (!additionalTypesByUserId.has(key)) additionalTypesByUserId.set(key, []);
+        additionalTypesByUserId.get(key).push({
+          usertype: row.usertype,
+          usertype_name: row.usertype_name,
+        });
+      }
+    }
+
+    for (const employee of employees) {
+      employee.additional_types = additionalTypesByUserId.get(String(employee.userid)) || [];
     }
 
     await connection.end();
@@ -106,20 +130,29 @@ export const getEmployeeById = async (req, res) => {
     // Connect to school database
     connection = await getSchoolConnection(schoolDbConfig);
 
-    // Get employee with user type
+    // Get employee from teacher table with user type from users table
     const [employees] = await connection.query(`
       SELECT
-        u.id,
-        u.name,
+        COALESCE(u.id, t.userid) as id,
+        t.id as teacher_id,
+        t.userid,
+        t.lastname,
+        t.firstname,
+        t.middlename,
+        TRIM(CONCAT_WS(' ', t.lastname, t.firstname, t.middlename)) as name,
         u.email,
         u.type as usertype_id,
         ut.utype as usertype_name,
         u.created_at,
         u.updated_at
-      FROM users u
+      FROM teacher t
+      LEFT JOIN users u ON u.id = t.userid
       LEFT JOIN usertype ut ON u.type = ut.id
-      WHERE u.id = ? AND u.deleted = 0
-    `, [id]);
+      WHERE t.deleted = 0
+        AND (u.deleted = 0 OR u.deleted IS NULL)
+        AND (t.userid = ? OR t.id = ?)
+      LIMIT 1
+    `, [id, id]);
 
     if (employees.length === 0) {
       await connection.end();
@@ -139,7 +172,7 @@ export const getEmployeeById = async (req, res) => {
       FROM faspriv fp
       LEFT JOIN usertype ut ON fp.usertype = ut.id
       WHERE fp.userid = ? AND fp.deleted = 0
-    `, [id]);
+    `, [employee.userid]);
 
     employee.additional_types = additionalTypes;
 

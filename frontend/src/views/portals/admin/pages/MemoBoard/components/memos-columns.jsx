@@ -1,10 +1,18 @@
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Eye, Edit } from 'lucide-react'
+import { Eye, Edit, Trash2, MoreHorizontal } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { DataTableColumnHeader } from './data-table-column-header'
 
-export const getColumns = (onViewMemo, onEditMemo, onViewVisibility) => [
+export const getColumns = (onViewMemo, onEditMemo, onViewVisibility, onDeleteMemo) => [
   {
     id: 'select',
     header: ({ table }) => (
@@ -122,28 +130,51 @@ export const getColumns = (onViewMemo, onEditMemo, onViewVisibility) => [
     cell: ({ row }) => {
       const memo = row.original
       return (
-        <div className='flex items-center gap-2'>
-          <Button
-            variant='ghost'
-            size='sm'
-            onClick={(e) => {
-              e.stopPropagation()
-              onViewMemo(memo)
-            }}
-          >
-            <Eye className='h-4 w-4' />
-          </Button>
-          <Button
-            variant='ghost'
-            size='sm'
-            onClick={(e) => {
-              e.stopPropagation()
-              onEditMemo(memo)
-            }}
-          >
-            <Edit className='h-4 w-4' />
-          </Button>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant='ghost'
+              size='sm'
+              className='h-8 w-8 p-0'
+            >
+              <span className='sr-only'>Open menu</span>
+              <MoreHorizontal className='h-4 w-4' />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='end'>
+            <DropdownMenuLabel>Actions</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+                onViewMemo(memo)
+              }}
+            >
+              <Eye className='mr-2 h-4 w-4' />
+              View Memo
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+                onEditMemo(memo)
+              }}
+            >
+              <Edit className='mr-2 h-4 w-4' />
+              Edit Memo
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+                onDeleteMemo(memo)
+              }}
+              className='text-destructive focus:text-destructive'
+            >
+              <Trash2 className='mr-2 h-4 w-4' />
+              Delete Memo
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )
     },
   },

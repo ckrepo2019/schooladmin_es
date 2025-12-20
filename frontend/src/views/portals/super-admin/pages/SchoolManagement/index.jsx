@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
+import { apiUrl } from '@/lib/api'
 import { SchoolsProvider } from './components/schools-provider'
 import { SchoolsTable } from './components/schools-table'
 import { SchoolsDialogs } from './components/schools-dialogs'
@@ -13,7 +14,7 @@ export default function SchoolManagement() {
   const fetchSchools = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:5000/api/super-admin/schools', {
+      const response = await fetch(apiUrl('/api/super-admin/schools'), {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',

@@ -9,7 +9,13 @@
       "Bash(npx shadcn@latest add:*)",
       "Bash(node -e:*)",
       "Bash(findstr:*)",
-      "Bash(del \"C:\\\\laragon\\\\www\\\\schooladmin_es\\\\backend\\\\routes\\\\schools.routes.js\")"
+      "Bash(del \"C:\\\\laragon\\\\www\\\\schooladmin_es\\\\backend\\\\routes\\\\schools.routes.js\")",
+      "Bash(node test-s3-upload.js:*)",
+      "WebFetch(domain:schooladmin-uploads.sgp1.vultrobjects.com)",
+      "Bash(del \"C:\\\\laragon\\\\www\\\\schooladmin_es\\\\backend\\\\test-s3-upload.js\")",
+      "Bash(rm:*)",
+      "Bash(tree:*)",
+      "Bash(cat:*)"
     ]
   }
 }

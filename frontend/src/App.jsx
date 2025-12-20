@@ -6,11 +6,16 @@ import { SuperAdminLayout } from '@/components/layout/SuperAdminLayout'
 import SuperAdminDashboard from '@/views/portals/super-admin/pages/Dashboard'
 import SchoolManagement from '@/views/portals/super-admin/pages/SchoolManagement'
 import UserManagement from '@/views/portals/super-admin/pages/UserManagement'
+import BucketMonitoring from '@/views/portals/super-admin/pages/BucketMonitoring'
 import { AdminLayout } from '@/components/layout/AdminLayout'
 import SchoolSelection from '@/views/portals/admin/SchoolSelection'
 import AdminDashboard from '@/views/portals/admin/pages/Dashboard'
 import EmployeeProfile from '@/views/portals/admin/pages/EmployeeProfile'
 import MemoBoard from '@/views/portals/admin/pages/MemoBoard'
+import AdminSettings from '@/views/portals/admin/pages/Settings'
+import SettingsProfile from '@/views/portals/admin/pages/Settings/Profile'
+import SettingsAccount from '@/views/portals/admin/pages/Settings/Account'
+import HelpCenter from '@/views/portals/admin/pages/HelpCenter'
 
 // Protected Route Component
 function ProtectedRoute({ children, requiredRole }) {
@@ -47,6 +52,7 @@ function App() {
           <Route path="dashboard" element={<SuperAdminDashboard />} />
           <Route path="users" element={<UserManagement />} />
           <Route path="schools" element={<SchoolManagement />} />
+          <Route path="bucket" element={<BucketMonitoring />} />
         </Route>
 
         {/* Admin School Selection */}
@@ -72,6 +78,12 @@ function App() {
           <Route path="profile" element={<div className="p-6">Profile - Coming Soon</div>} />
           <Route path="calendar" element={<div className="p-6">Calendar - Coming Soon</div>} />
           <Route path="memo-board" element={<MemoBoard />} />
+          <Route path="settings" element={<AdminSettings />}>
+            <Route index element={<Navigate to="profile" replace />} />
+            <Route path="profile" element={<SettingsProfile />} />
+            <Route path="account" element={<SettingsAccount />} />
+          </Route>
+          <Route path="help-center" element={<HelpCenter />} />
 
           {/* Finance Reports */}
           <Route path="finance/cashier-transactions" element={<div className="p-6">Cashier Transactions - Coming Soon</div>} />

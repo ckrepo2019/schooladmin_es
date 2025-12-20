@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Loader2, LogIn } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { apiUrl } from '@/lib/api'
+import ckLogo from '@/assets/ck-logo.png'
+import { setFavicon } from '@/lib/metadata'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -16,7 +19,6 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { PasswordInput } from '@/components/PasswordInput'
-import Logo from '@/assets/react.svg'
 import DashboardPreview from '@/assets/image.png'
 
 const formSchema = z.object({
@@ -33,6 +35,12 @@ const formSchema = z.object({
 export default function Login() {
   const [isLoading, setIsLoading] = useState(false)
   const navigate = useNavigate()
+  const appTitle = import.meta.env.VITE_APP_TITLE || 'School Admin'
+
+  useEffect(() => {
+    document.title = `ESSENTIEL | ${appTitle.toUpperCase()}`
+    setFavicon(ckLogo)
+  }, [appTitle])
 
   const form = useForm({
     resolver: zodResolver(formSchema),
@@ -46,7 +54,7 @@ export default function Login() {
     setIsLoading(true)
 
     try {
-      const response = await fetch('http://localhost:5000/api/super-admin/login', {
+      const response = await fetch(apiUrl('/api/super-admin/login'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -86,7 +94,7 @@ export default function Login() {
       <div className='lg:p-8'>
         <div className='mx-auto flex w-full flex-col justify-center space-y-2 py-8 sm:w-[480px] sm:p-8'>
           <div className='mb-4 flex items-center justify-center'>
-            <img src={Logo} alt='Logo' className='me-2 h-8 w-8' />
+            <img src={ckLogo} alt='Logo' className='me-2 h-8 w-8' />
             <h1 className='text-xl font-medium'>School Admin</h1>
           </div>
         </div>

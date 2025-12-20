@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
+import { apiUrl } from '@/lib/api'
 import {
   Dialog,
   DialogContent,
@@ -52,7 +53,7 @@ export function UsersActionDialog({ open, onSuccess }) {
     const fetchSchools = async () => {
       try {
         const token = localStorage.getItem('token')
-        const response = await fetch('http://localhost:5000/api/super-admin/schools', {
+        const response = await fetch(apiUrl('/api/super-admin/schools'), {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -99,8 +100,8 @@ export function UsersActionDialog({ open, onSuccess }) {
     try {
       const token = localStorage.getItem('token')
       const url = isEdit
-        ? `http://localhost:5000/api/super-admin/users/${currentRow.id}`
-        : 'http://localhost:5000/api/super-admin/users'
+        ? apiUrl(`/api/super-admin/users/${currentRow.id}`)
+        : apiUrl('/api/super-admin/users')
 
       const response = await fetch(url, {
         method: isEdit ? 'PUT' : 'POST',

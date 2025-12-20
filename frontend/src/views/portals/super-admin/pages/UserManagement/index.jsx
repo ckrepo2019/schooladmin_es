@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
+import { apiUrl } from '@/lib/api'
 import { UsersProvider } from './components/users-provider'
 import { UsersTable } from './components/users-table'
 import { UsersDialogs } from './components/users-dialogs'
@@ -13,7 +14,7 @@ export default function UserManagement() {
   const fetchUsers = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:5000/api/super-admin/users', {
+      const response = await fetch(apiUrl('/api/super-admin/users'), {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',

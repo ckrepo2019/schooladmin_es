@@ -16,6 +16,10 @@ import {
   deleteUser,
   updatePassword,
 } from '../controllers/userManagementController.js';
+import {
+  getAllBucketFiles,
+  getBucketStats,
+} from '../controllers/bucketController.js';
 import { verifyToken, verifySuperAdmin } from '../middleware/auth.js';
 import { uploadSchoolLogo } from '../middleware/upload.js';
 
@@ -65,15 +69,15 @@ router.post('/schools/upload-logo', verifyToken, verifySuperAdmin, (req, res) =>
       });
     }
 
-    // Return the file path
-    const filePath = `/uploads/school_logo/${req.file.filename}`;
+    // Return the S3 URL (multer-s3 provides location property)
+    const filePath = req.file.location;
 
     res.status(200).json({
       status: 'success',
       message: 'File uploaded successfully',
       data: {
         filePath,
-        filename: req.file.filename,
+        filename: req.file.key, // S3 key (path in bucket)
         originalname: req.file.originalname,
         size: req.file.size,
       },
@@ -114,5 +118,12 @@ router.delete('/users/:id', verifyToken, verifySuperAdmin, deleteUser);
 
 // PUT /api/super-admin/users/:id/password - Update user password
 router.put('/users/:id/password', verifyToken, verifySuperAdmin, updatePassword);
+
+// Bucket Monitoring Routes (all require authentication and super-admin role)
+// GET /api/super-admin/bucket/files - Get all files in bucket
+router.get('/bucket/files', verifyToken, verifySuperAdmin, getAllBucketFiles);
+
+// GET /api/super-admin/bucket/stats - Get bucket storage statistics
+router.get('/bucket/stats', verifyToken, verifySuperAdmin, getBucketStats);
 
 export default router;

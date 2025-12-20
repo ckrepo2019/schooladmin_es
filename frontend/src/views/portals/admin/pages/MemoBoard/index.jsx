@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
+import { apiUrl } from '@/lib/api'
 import { MemosProvider } from './components/memos-provider'
 import { MemosTable } from './components/memos-table'
 import { MemoEditor } from './components/memo-editor'
@@ -22,7 +23,7 @@ export default function MemoBoard() {
         return
       }
 
-      const response = await fetch('http://localhost:5000/api/admin/memos', {
+      const response = await fetch(apiUrl('/api/admin/memos'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

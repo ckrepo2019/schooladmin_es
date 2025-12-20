@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { toast } from 'sonner'
+import { apiUrl } from '@/lib/api'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
@@ -32,7 +33,7 @@ export function EmployeeSelector({ selectedEmployees, onSelectionChange, selecte
     try {
       const token = localStorage.getItem('token')
 
-      const response = await fetch('http://localhost:5000/api/admin/employees', {
+      const response = await fetch(apiUrl('/api/admin/employees'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

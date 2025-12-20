@@ -1,81 +1,131 @@
-import { useState, useEffect } from 'react'
-import { useEditor, EditorContent } from '@tiptap/react'
-import StarterKit from '@tiptap/starter-kit'
-import Placeholder from '@tiptap/extension-placeholder'
-import TextAlign from '@tiptap/extension-text-align'
-import Underline from '@tiptap/extension-underline'
-import { toast } from 'sonner'
+import { useState, useRef, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  ArrowLeft,
-  Bold,
-  Italic,
-  Underline as UnderlineIcon,
-  List,
-  ListOrdered,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-  Undo,
-  Redo,
-  Loader2,
-} from 'lucide-react'
+import { Upload, X, FileText, File, ArrowLeft, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
+import { apiUrl } from '@/lib/api'
 import { EmployeeSelector } from './employee-selector'
 
 export function MemoEditor({ memo, onBack, selectedSchool }) {
   const [title, setTitle] = useState('')
   const [selectedEmployees, setSelectedEmployees] = useState([])
+  const [selectedFile, setSelectedFile] = useState(null) // Store the actual File object
+  const [filePreview, setFilePreview] = useState(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const fileInputRef = useRef(null)
 
-  const editor = useEditor({
-    extensions: [
-      StarterKit,
-      Underline,
-      TextAlign.configure({
-        types: ['heading', 'paragraph'],
-      }),
-      Placeholder.configure({
-        placeholder: 'Write your memo content here...',
-      }),
-    ],
-    content: '',
-    editorProps: {
-      attributes: {
-        class: 'prose prose-sm max-w-none focus:outline-none min-h-[400px] p-4',
-      },
-    },
-  })
-
+  // If editing existing memo with file URL, set it as preview
   useEffect(() => {
-    if (memo && editor) {
-      setTitle(memo.title)
-      editor.commands.setContent(memo.content)
+    if (memo) {
+      setTitle(memo.title || '')
       setSelectedEmployees(memo.user_ids || [])
+
+      if (memo.content) {
+        // content is the file URL (for existing memos)
+        const fileName = memo.content.split('/').pop()
+        const fileType = getFileType(fileName)
+        setSelectedFile({
+          isExisting: true,
+          fileUrl: memo.content,
+          fileName: fileName,
+          fileType: fileType,
+        })
+        setFilePreview(memo.content)
+      }
     }
-  }, [memo, editor])
+  }, [memo])
+
+  const getFileType = (fileName) => {
+    const ext = fileName.split('.').pop()?.toLowerCase()
+    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg']
+    if (imageExts.includes(ext)) return 'image'
+    if (ext === 'pdf') return 'pdf'
+    if (ext === 'docx') return 'docx'
+    return 'unknown'
+  }
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+
+    // Store the file object
+    setSelectedFile({
+      file: file,
+      fileName: file.name,
+      fileType: getFileType(file.name),
+    })
+
+    // Create local preview
+    const previewUrl = URL.createObjectURL(file)
+    setFilePreview(previewUrl)
+  }
+
+  const handleRemoveFile = () => {
+    setSelectedFile(null)
+    if (filePreview && !filePreview.startsWith('http')) {
+      // Revoke object URL to free memory
+      URL.revokeObjectURL(filePreview)
+    }
+    setFilePreview(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  const uploadFileToS3 = async (file) => {
+    const token = localStorage.getItem('token')
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetch(apiUrl('/api/admin/memos/upload-file'), {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData,
+      credentials: 'include',
+    })
+
+    const data = await response.json()
+
+    if (response.ok) {
+      return data.data.fileUrl
+    } else {
+      throw new Error(data.message || 'Failed to upload file')
+    }
+  }
 
   const handleSave = async () => {
     if (!title.trim()) {
-      toast.error('Please enter a title')
+      toast.error('Please enter a memo title')
       return
     }
 
-    if (!editor || editor.isEmpty) {
-      toast.error('Please enter memo content')
+    if (!selectedFile) {
+      toast.error('Please select a file')
       return
     }
 
     setIsSubmitting(true)
 
     try {
-      const token = localStorage.getItem('token')
-      const content = editor.getHTML()
+      let fileUrl
 
+      // If it's a new file, upload it first
+      if (selectedFile.file) {
+        toast.info('Uploading file...')
+        fileUrl = await uploadFileToS3(selectedFile.file)
+      } else if (selectedFile.isExisting) {
+        // Use existing file URL for edits
+        fileUrl = selectedFile.fileUrl
+      }
+
+      // Now save the memo with the file URL
+      const token = localStorage.getItem('token')
       const url = memo
-        ? `http://localhost:5000/api/admin/memos/${memo.id}`
-        : 'http://localhost:5000/api/admin/memos/create'
+        ? apiUrl(`/api/admin/memos/${memo.id}`)
+        : apiUrl('/api/admin/memos/create')
 
       const method = memo ? 'PUT' : 'POST'
 
@@ -92,9 +142,9 @@ export function MemoEditor({ memo, onBack, selectedSchool }) {
             db_username: selectedSchool.db_username || 'root',
             db_password: selectedSchool.db_password || '',
           },
-          title,
-          content,
-          user_ids: selectedEmployees,
+          title: title.trim(),
+          content: fileUrl, // Save S3 URL as content
+          user_ids: selectedEmployees.length > 0 ? selectedEmployees : null,
         }),
       })
 
@@ -108,18 +158,10 @@ export function MemoEditor({ memo, onBack, selectedSchool }) {
       }
     } catch (error) {
       console.error('Error saving memo:', error)
-      toast.error('An error occurred while saving memo')
+      toast.error(error.message || 'An error occurred while saving memo')
     } finally {
       setIsSubmitting(false)
     }
-  }
-
-  if (!editor) {
-    return (
-      <div className='flex h-[450px] items-center justify-center'>
-        <Loader2 className='h-8 w-8 animate-spin text-muted-foreground' />
-      </div>
-    )
   }
 
   return (
@@ -146,123 +188,146 @@ export function MemoEditor({ memo, onBack, selectedSchool }) {
         </Button>
       </div>
 
-      <div className='space-y-4'>
-        <div>
-          <Label htmlFor='title'>Title</Label>
+      <div className='space-y-6'>
+        {/* Title Input */}
+        <div className='space-y-2'>
+          <Label htmlFor='title'>Memo Title</Label>
           <Input
             id='title'
-            placeholder='Enter memo title'
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            className='mt-2'
+            placeholder='Enter memo title...'
           />
         </div>
 
+        {/* Employee Selection */}
         <EmployeeSelector
           selectedEmployees={selectedEmployees}
           onSelectionChange={setSelectedEmployees}
           selectedSchool={selectedSchool}
         />
 
-        <div>
-          <Label>Content</Label>
-          <div className='mt-2 border rounded-lg overflow-hidden'>
-            {/* Toolbar */}
-            <div className='flex items-center gap-1 p-2 border-b bg-muted/50'>
-              <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => editor.chain().focus().toggleBold().run()}
-                className={editor.isActive('bold') ? 'bg-muted' : ''}
-              >
-                <Bold className='h-4 w-4' />
-              </Button>
-              <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => editor.chain().focus().toggleItalic().run()}
-                className={editor.isActive('italic') ? 'bg-muted' : ''}
-              >
-                <Italic className='h-4 w-4' />
-              </Button>
-              <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => editor.chain().focus().toggleUnderline().run()}
-                className={editor.isActive('underline') ? 'bg-muted' : ''}
-              >
-                <UnderlineIcon className='h-4 w-4' />
-              </Button>
+        {/* File Upload Section */}
+        <div className='space-y-4'>
+          <Label>Attached File</Label>
 
-              <div className='w-px h-6 bg-border mx-1' />
-
+          {!selectedFile ? (
+            <div className='flex justify-center'>
               <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => editor.chain().focus().toggleBulletList().run()}
-                className={editor.isActive('bulletList') ? 'bg-muted' : ''}
+                type='button'
+                variant='outline'
+                size='lg'
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isSubmitting}
+                className='h-32 w-full max-w-md border-dashed'
               >
-                <List className='h-4 w-4' />
+                <div className='flex flex-col items-center space-y-2'>
+                  <Upload className='h-8 w-8 text-muted-foreground' />
+                  <div className='text-sm'>Click to select file</div>
+                  <div className='text-xs text-muted-foreground'>
+                    Supports: Images, PDF, DOCX (Max 10MB)
+                  </div>
+                </div>
               </Button>
-              <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => editor.chain().focus().toggleOrderedList().run()}
-                className={editor.isActive('orderedList') ? 'bg-muted' : ''}
-              >
-                <ListOrdered className='h-4 w-4' />
-              </Button>
-
-              <div className='w-px h-6 bg-border mx-1' />
-
-              <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => editor.chain().focus().setTextAlign('left').run()}
-                className={editor.isActive({ textAlign: 'left' }) ? 'bg-muted' : ''}
-              >
-                <AlignLeft className='h-4 w-4' />
-              </Button>
-              <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => editor.chain().focus().setTextAlign('center').run()}
-                className={editor.isActive({ textAlign: 'center' }) ? 'bg-muted' : ''}
-              >
-                <AlignCenter className='h-4 w-4' />
-              </Button>
-              <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => editor.chain().focus().setTextAlign('right').run()}
-                className={editor.isActive({ textAlign: 'right' }) ? 'bg-muted' : ''}
-              >
-                <AlignRight className='h-4 w-4' />
-              </Button>
-
-              <div className='w-px h-6 bg-border mx-1' />
-
-              <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => editor.chain().focus().undo().run()}
-                disabled={!editor.can().undo()}
-              >
-                <Undo className='h-4 w-4' />
-              </Button>
-              <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => editor.chain().focus().redo().run()}
-                disabled={!editor.can().redo()}
-              >
-                <Redo className='h-4 w-4' />
-              </Button>
+              <input
+                ref={fileInputRef}
+                type='file'
+                accept='image/*,.pdf,.docx'
+                onChange={handleFileSelect}
+                className='hidden'
+              />
             </div>
+          ) : (
+            <div className='border rounded-lg p-4 space-y-4'>
+              {/* File Preview */}
+              {selectedFile.fileType === 'image' ? (
+                <div className='flex justify-center'>
+                  <img
+                    src={filePreview}
+                    alt='Preview'
+                    className='max-h-96 rounded-lg'
+                  />
+                </div>
+              ) : selectedFile.fileType === 'pdf' ? (
+                <div className='space-y-2'>
+                  <div className='flex items-center justify-between p-2 bg-muted rounded-lg'>
+                    <div className='flex items-center space-x-2'>
+                      <FileText className='h-5 w-5 text-muted-foreground' />
+                      <p className='font-medium text-sm'>{selectedFile.fileName}</p>
+                    </div>
+                  </div>
+                  {selectedFile.isExisting ? (
+                    <div className='border rounded-lg overflow-hidden'>
+                      <iframe
+                        src={filePreview}
+                        className='w-full h-[600px]'
+                        title='PDF Preview'
+                      />
+                    </div>
+                  ) : (
+                    <div className='flex items-center justify-center p-8 bg-muted rounded-lg'>
+                      <FileText className='h-16 w-16 text-muted-foreground' />
+                      <div className='ml-4'>
+                        <p className='font-medium'>{selectedFile.fileName}</p>
+                        <p className='text-sm text-muted-foreground'>
+                          PDF preview will be available after saving
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : selectedFile.fileType === 'docx' ? (
+                <div className='space-y-2'>
+                  <div className='flex items-center justify-between p-2 bg-muted rounded-lg'>
+                    <div className='flex items-center space-x-2'>
+                      <File className='h-5 w-5 text-muted-foreground' />
+                      <p className='font-medium text-sm'>{selectedFile.fileName}</p>
+                    </div>
+                  </div>
+                  {selectedFile.isExisting ? (
+                    <div className='border rounded-lg overflow-hidden'>
+                      <iframe
+                        src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(filePreview)}`}
+                        className='w-full h-[600px]'
+                        title='Document Preview'
+                      />
+                    </div>
+                  ) : (
+                    <div className='flex items-center justify-center p-8 bg-muted rounded-lg'>
+                      <File className='h-16 w-16 text-muted-foreground' />
+                      <div className='ml-4'>
+                        <p className='font-medium'>{selectedFile.fileName}</p>
+                        <p className='text-sm text-muted-foreground'>
+                          Document preview will be available after saving
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className='flex items-center justify-center p-8 bg-muted rounded-lg'>
+                  <File className='h-16 w-16 text-muted-foreground' />
+                  <div className='ml-4'>
+                    <p className='font-medium'>{selectedFile.fileName}</p>
+                    <p className='text-sm text-muted-foreground'>Preview not available</p>
+                  </div>
+                </div>
+              )}
 
-            {/* Editor */}
-            <EditorContent editor={editor} className='bg-background' />
-          </div>
+              {/* Remove Button */}
+              <div className='flex justify-center'>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  onClick={handleRemoveFile}
+                >
+                  <X className='h-4 w-4 mr-2' />
+                  Remove File
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

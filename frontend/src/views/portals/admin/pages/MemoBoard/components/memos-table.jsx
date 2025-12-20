@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { toast } from 'sonner'
+import { apiUrl } from '@/lib/api'
 import {
   flexRender,
   getCoreRowModel,
@@ -24,6 +26,9 @@ import { DataTablePagination } from './data-table-pagination'
 import { getColumns } from './memos-columns'
 import { MemoViewDialog } from './memo-view-dialog'
 import { MemoVisibilityDialog } from './memo-visibility-dialog'
+import { MemoDeleteDialog } from './memo-delete-dialog'
+import { useMemos } from './memos-provider'
+import { Trash2 } from 'lucide-react'
 
 export function MemosTable({ data, onAddMemo, onEditMemo, onRefresh, selectedSchool }) {
   const [rowSelection, setRowSelection] = useState({})
@@ -32,6 +37,7 @@ export function MemosTable({ data, onAddMemo, onEditMemo, onRefresh, selectedSch
   const [sorting, setSorting] = useState([])
   const [viewDialogMemo, setViewDialogMemo] = useState(null)
   const [visibilityDialogMemo, setVisibilityDialogMemo] = useState(null)
+  const { setDeleteDialogMemo } = useMemos()
 
   const handleViewMemo = (memo) => {
     setViewDialogMemo(memo)
@@ -41,7 +47,54 @@ export function MemosTable({ data, onAddMemo, onEditMemo, onRefresh, selectedSch
     setVisibilityDialogMemo(memo)
   }
 
-  const columns = getColumns(handleViewMemo, onEditMemo, handleViewVisibility)
+  const handleDeleteMemo = (memo) => {
+    setDeleteDialogMemo(memo)
+  }
+
+  const handleBulkDelete = async () => {
+    const selectedRows = table.getFilteredSelectedRowModel().rows
+    const selectedMemos = selectedRows.map(row => row.original)
+
+    if (selectedMemos.length === 0) {
+      return
+    }
+
+    const confirmMessage = `Are you sure you want to delete ${selectedMemos.length} memo(s)? This action cannot be undone.`
+
+    if (!window.confirm(confirmMessage)) {
+      return
+    }
+
+    try {
+      const token = localStorage.getItem('token')
+      const deletePromises = selectedMemos.map(memo =>
+        fetch(apiUrl(`/api/admin/memos/${memo.id}`), {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            schoolDbConfig: {
+              db_name: selectedSchool.db_name,
+              db_username: selectedSchool.db_username || 'root',
+              db_password: selectedSchool.db_password || '',
+            },
+          }),
+        })
+      )
+
+      await Promise.all(deletePromises)
+      toast.success(`Successfully deleted ${selectedMemos.length} memo(s)`)
+      setRowSelection({})
+      if (onRefresh) onRefresh()
+    } catch (error) {
+      toast.error('An error occurred while deleting memos')
+    }
+  }
+
+  const columns = getColumns(handleViewMemo, onEditMemo, handleViewVisibility, handleDeleteMemo)
 
   const table = useReactTable({
     data,
@@ -65,6 +118,8 @@ export function MemosTable({ data, onAddMemo, onEditMemo, onRefresh, selectedSch
     getFacetedUniqueValues: getFacetedUniqueValues(),
   })
 
+  const selectedCount = table.getFilteredSelectedRowModel().rows.length
+
   return (
     <>
       <div className='space-y-6'>
@@ -83,14 +138,26 @@ export function MemosTable({ data, onAddMemo, onEditMemo, onRefresh, selectedSch
 
         <div className='space-y-4'>
           <div className='flex items-center justify-between'>
-            <Input
-              placeholder='Search memos...'
-              value={(table.getColumn('title')?.getFilterValue()) ?? ''}
-              onChange={(event) =>
-                table.getColumn('title')?.setFilterValue(event.target.value)
-              }
-              className='h-8 w-[150px] lg:w-[250px]'
-            />
+            <div className='flex items-center gap-2'>
+              <Input
+                placeholder='Search memos...'
+                value={(table.getColumn('title')?.getFilterValue()) ?? ''}
+                onChange={(event) =>
+                  table.getColumn('title')?.setFilterValue(event.target.value)
+                }
+                className='h-8 w-[150px] lg:w-[250px]'
+              />
+              {selectedCount > 0 && (
+                <Button
+                  variant='destructive'
+                  size='sm'
+                  onClick={handleBulkDelete}
+                >
+                  <Trash2 className='mr-2 h-4 w-4' />
+                  Delete {selectedCount} memo{selectedCount > 1 ? 's' : ''}
+                </Button>
+              )}
+            </div>
           </div>
 
           <div className='rounded-md border'>
@@ -157,6 +224,11 @@ export function MemosTable({ data, onAddMemo, onEditMemo, onRefresh, selectedSch
         memo={visibilityDialogMemo}
         open={!!visibilityDialogMemo}
         onClose={() => setVisibilityDialogMemo(null)}
+        selectedSchool={selectedSchool}
+      />
+
+      <MemoDeleteDialog
+        onSuccess={onRefresh}
         selectedSchool={selectedSchool}
       />
     </>

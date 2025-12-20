@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
+import { apiUrl } from '@/lib/api'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,7 +33,7 @@ export function SchoolsDeleteDialog({ onSuccess }) {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`http://localhost:5000/api/super-admin/schools/${currentRow.id}`, {
+      const response = await fetch(apiUrl(`/api/super-admin/schools/${currentRow.id}`), {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',

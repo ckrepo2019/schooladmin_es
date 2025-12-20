@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
+import { apiUrl } from '@/lib/api'
 import { EmployeesProvider } from './components/employees-provider'
 import { EmployeesTable } from './components/employees-table'
 
@@ -19,7 +20,7 @@ export default function EmployeeProfile() {
         return
       }
 
-      const response = await fetch('http://localhost:5000/api/admin/employees', {
+      const response = await fetch(apiUrl('/api/admin/employees'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

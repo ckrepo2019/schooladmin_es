@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
+import { apiUrl } from '@/lib/api'
 import {
   Dialog,
   DialogContent,
@@ -51,7 +52,7 @@ export function UsersUpdatePasswordDialog({ onSuccess }) {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`http://localhost:5000/api/super-admin/users/${currentRow.id}/password`, {
+      const response = await fetch(apiUrl(`/api/super-admin/users/${currentRow.id}/password`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

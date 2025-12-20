@@ -5,12 +5,15 @@ const MemosContext = createContext(null)
 export function MemosProvider({ children }) {
   const [open, setOpen] = useState(null)
   const [currentRow, setCurrentRow] = useState(null)
+  const [deleteDialogMemo, setDeleteDialogMemo] = useState(null)
 
   const value = {
     open,
     setOpen,
     currentRow,
     setCurrentRow,
+    deleteDialogMemo,
+    setDeleteDialogMemo,
   }
 
   return (

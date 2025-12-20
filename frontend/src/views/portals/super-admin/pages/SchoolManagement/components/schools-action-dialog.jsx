@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'sonner'
 import { Loader2, CheckCircle2, Upload, X } from 'lucide-react'
+import { apiUrl } from '@/lib/api'
 import {
   Dialog,
   DialogContent,
@@ -103,7 +104,7 @@ export function SchoolsActionDialog({ open, onSuccess }) {
       formData.append('logo', selectedFile)
 
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:5000/api/super-admin/schools/upload-logo', {
+      const response = await fetch(apiUrl('/api/super-admin/schools/upload-logo'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -143,7 +144,7 @@ export function SchoolsActionDialog({ open, onSuccess }) {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:5000/api/super-admin/schools/test-connection', {
+      const response = await fetch(apiUrl('/api/super-admin/schools/test-connection'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -192,8 +193,8 @@ export function SchoolsActionDialog({ open, onSuccess }) {
 
       const token = localStorage.getItem('token')
       const url = isEdit
-        ? `http://localhost:5000/api/super-admin/schools/${currentRow.id}`
-        : 'http://localhost:5000/api/super-admin/schools'
+        ? apiUrl(`/api/super-admin/schools/${currentRow.id}`)
+        : apiUrl('/api/super-admin/schools')
 
       const response = await fetch(url, {
         method: isEdit ? 'PUT' : 'POST',
@@ -296,7 +297,7 @@ export function SchoolsActionDialog({ open, onSuccess }) {
                 {(uploadedLogoPath || (isEdit && currentRow?.image_logo)) && (
                   <div className='relative w-20 h-20 border rounded-lg overflow-hidden bg-muted flex items-center justify-center'>
                     <img
-                      src={`http://localhost:5000${uploadedLogoPath || currentRow?.image_logo}`}
+                      src={apiUrl(uploadedLogoPath || currentRow?.image_logo)}
                       alt='School logo preview'
                       className='w-full h-full object-contain'
                       onError={(e) => {

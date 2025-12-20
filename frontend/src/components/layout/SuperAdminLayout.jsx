@@ -1,7 +1,10 @@
 import { Outlet } from 'react-router-dom'
+import { useEffect } from 'react'
 import { Toaster } from 'sonner'
 import { cn } from '@/lib/utils'
 import { getCookie } from '@/lib/cookies'
+import ckLogo from '@/assets/ck-logo.png'
+import { setFavicon } from '@/lib/metadata'
 import { ThemeProvider } from '@/context/theme-provider'
 import { LayoutProvider } from '@/context/layout-provider'
 import { SearchProvider } from '@/context/search-provider'
@@ -14,6 +17,12 @@ import { Main } from './Main'
 export function SuperAdminLayout() {
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const defaultOpen = getCookie('sidebar_state') !== 'false'
+  const appTitle = import.meta.env.VITE_APP_TITLE || 'School Admin'
+
+  useEffect(() => {
+    document.title = `SYS ADMIN | ${appTitle.toUpperCase()}`
+    setFavicon(ckLogo)
+  }, [appTitle])
 
   return (
     <ThemeProvider>

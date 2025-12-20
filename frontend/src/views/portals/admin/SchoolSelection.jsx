@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Loader2, School, ChevronRight, MapPin } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { apiUrl } from '@/lib/api'
+import ckLogo from '@/assets/ck-logo.png'
+import { setFavicon } from '@/lib/metadata'
 import {
   Card,
   CardContent,
@@ -16,15 +19,21 @@ export default function SchoolSelection() {
   const [schools, setSchools] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const user = JSON.parse(localStorage.getItem('user') || '{}')
+  const appTitle = import.meta.env.VITE_APP_TITLE || 'School Admin'
 
   useEffect(() => {
     fetchUserSchools()
   }, [])
 
+  useEffect(() => {
+    document.title = `Select School | ${appTitle}`
+    setFavicon(ckLogo)
+  }, [appTitle])
+
   const fetchUserSchools = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:5000/api/auth/me', {
+      const response = await fetch(apiUrl('/api/auth/me'), {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -109,7 +118,7 @@ export default function SchoolSelection() {
                     {school.image_logo ? (
                       <div className='flex h-12 w-12 items-center justify-center rounded-lg overflow-hidden bg-muted'>
                         <img
-                          src={`http://localhost:5000${school.image_logo}`}
+                          src={apiUrl(school.image_logo)}
                           alt={school.school_name}
                           className='h-full w-full object-contain'
                           onError={(e) => {
