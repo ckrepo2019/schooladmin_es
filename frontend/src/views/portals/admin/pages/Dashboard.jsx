@@ -8,11 +8,15 @@ import {
   TrendingDown,
   TrendingUp,
   UsersRound,
+  Users,
+  ClipboardList,
+  Activity,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
+import { Progress } from '@/components/ui/progress'
 
 const hashString = (value) => {
   let hash = 0
@@ -153,6 +157,140 @@ function MiniLineChart({ series }) {
   )
 }
 
+function BarChart({ data, height = 200 }) {
+  const maxValue = Math.max(...data.map((d) => d.value))
+  const barWidth = 100 / data.length
+
+  return (
+    <div className='flex h-full items-end justify-between gap-2' style={{ height: `${height}px` }}>
+      {data.map((item, index) => {
+        const barHeight = (item.value / maxValue) * 100
+        return (
+          <div key={index} className='flex flex-1 flex-col items-center gap-2'>
+            <div className='flex w-full flex-1 items-end'>
+              <div
+                className='w-full rounded-t-md bg-primary transition-all hover:opacity-80'
+                style={{ height: `${barHeight}%` }}
+                title={`${item.label}: ${item.value}`}
+              />
+            </div>
+            <div className='text-xs font-medium text-muted-foreground'>{item.label}</div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function DonutChart({ data, size = 120 }) {
+  const total = data.reduce((sum, item) => sum + item.value, 0)
+  const radius = size / 2 - 10
+  const circumference = 2 * Math.PI * radius
+  let currentAngle = -90
+
+  const colors = [
+    'hsl(var(--primary))',
+    'hsl(var(--chart-2))',
+    'hsl(var(--chart-3))',
+    'hsl(var(--chart-4))',
+    'hsl(var(--chart-5))',
+  ]
+
+  return (
+    <div className='flex items-center gap-4'>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill='none'
+          stroke='hsl(var(--muted))'
+          strokeWidth='16'
+        />
+        {data.map((item, index) => {
+          const percentage = (item.value / total) * 100
+          const dashOffset = circumference - (percentage / 100) * circumference
+          const rotation = currentAngle
+          currentAngle += (percentage / 100) * 360
+
+          return (
+            <circle
+              key={index}
+              cx={size / 2}
+              cy={size / 2}
+              r={radius}
+              fill='none'
+              stroke={colors[index % colors.length]}
+              strokeWidth='16'
+              strokeDasharray={circumference}
+              strokeDashoffset={dashOffset}
+              transform={`rotate(${rotation} ${size / 2} ${size / 2})`}
+              className='transition-all'
+            />
+          )
+        })}
+      </svg>
+      <div className='flex-1 space-y-2'>
+        {data.map((item, index) => {
+          const percentage = ((item.value / total) * 100).toFixed(1)
+          return (
+            <div key={index} className='flex items-center gap-2 text-sm'>
+              <div
+                className='h-3 w-3 rounded-sm'
+                style={{ backgroundColor: colors[index % colors.length] }}
+              />
+              <span className='flex-1 text-muted-foreground'>{item.label}</span>
+              <span className='font-medium'>{percentage}%</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ProgressRing({ value, max, label, size = 100 }) {
+  const percentage = (value / max) * 100
+  const radius = (size - 12) / 2
+  const circumference = 2 * Math.PI * radius
+  const offset = circumference - (percentage / 100) * circumference
+
+  return (
+    <div className='flex flex-col items-center gap-2'>
+      <div className='relative'>
+        <svg width={size} height={size} className='-rotate-90'>
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill='none'
+            stroke='hsl(var(--muted))'
+            strokeWidth='8'
+          />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill='none'
+            stroke='hsl(var(--primary))'
+            strokeWidth='8'
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            strokeLinecap='round'
+            className='transition-all duration-500'
+          />
+        </svg>
+        <div className='absolute inset-0 flex items-center justify-center'>
+          <div className='text-center'>
+            <div className='text-lg font-bold'>{percentage.toFixed(0)}%</div>
+          </div>
+        </div>
+      </div>
+      <div className='text-center text-sm font-medium text-muted-foreground'>{label}</div>
+    </div>
+  )
+}
+
 function generateMockDashboard(selectedSchool) {
   const seedValue = String(
     selectedSchool?.id ||
@@ -194,6 +332,7 @@ function generateMockDashboard(selectedSchool) {
     {
       key: 'calendar',
       title: 'Calendar',
+      watermark: 'CAL',
       value: upcomingEvents,
       helper: 'Upcoming events (30 days)',
       icon: CalendarDays,
@@ -205,6 +344,7 @@ function generateMockDashboard(selectedSchool) {
     {
       key: 'memos',
       title: 'Memo Board',
+      watermark: 'MEMO',
       value: memosThisWeek,
       helper: `${unreadMemos} unread this week`,
       icon: Megaphone,
@@ -216,6 +356,7 @@ function generateMockDashboard(selectedSchool) {
     {
       key: 'finance',
       title: 'Finance',
+      watermark: 'FIN',
       value: collectionsToday,
       helper: 'Collections today',
       icon: DollarSign,
@@ -228,6 +369,7 @@ function generateMockDashboard(selectedSchool) {
     {
       key: 'hr',
       title: 'HR',
+      watermark: 'HR',
       value: employees,
       helper: 'Active employees',
       icon: UsersRound,
@@ -239,6 +381,7 @@ function generateMockDashboard(selectedSchool) {
     {
       key: 'registrar',
       title: 'Registrar',
+      watermark: 'REG',
       value: enrolledStudents,
       helper: `${pendingEnrollments} pending enrollments`,
       icon: GraduationCap,
@@ -250,6 +393,7 @@ function generateMockDashboard(selectedSchool) {
     {
       key: 'attendance',
       title: 'Attendance',
+      watermark: 'ATT',
       value: attendanceToday,
       helper: 'Today’s attendance rate',
       icon: UsersRound,
@@ -262,6 +406,7 @@ function generateMockDashboard(selectedSchool) {
     {
       key: 'receivables',
       title: 'Receivables',
+      watermark: 'AR',
       value: receivables,
       helper: 'Outstanding balance',
       icon: DollarSign,
@@ -274,6 +419,7 @@ function generateMockDashboard(selectedSchool) {
     {
       key: 'tasks',
       title: 'Tasks',
+      watermark: 'TASK',
       value: pendingTasks,
       helper: 'Pending actions',
       icon: TrendingUp,
@@ -320,6 +466,35 @@ function generateMockDashboard(selectedSchool) {
     }
   })
 
+  const gradeLevels = [
+    { label: 'Grade 7', value: int(120, 280) },
+    { label: 'Grade 8', value: int(115, 270) },
+    { label: 'Grade 9', value: int(110, 265) },
+    { label: 'Grade 10', value: int(105, 250) },
+    { label: 'Grade 11', value: int(95, 220) },
+    { label: 'Grade 12', value: int(90, 210) },
+  ]
+
+  const departments = [
+    { label: 'Academic', value: int(35, 85) },
+    { label: 'Admin', value: int(12, 28) },
+    { label: 'Support', value: int(8, 22) },
+    { label: 'Maintenance', value: int(5, 15) },
+  ]
+
+  const studentGender = [
+    { label: 'Male', value: int(400, 700) },
+    { label: 'Female', value: int(400, 700) },
+  ]
+
+  const attendanceWeek = [
+    { label: 'Mon', value: float(88, 98, 1) },
+    { label: 'Tue', value: float(89, 98, 1) },
+    { label: 'Wed', value: float(87, 97, 1) },
+    { label: 'Thu', value: float(88, 98, 1) },
+    { label: 'Fri', value: float(85, 96, 1) },
+  ]
+
   return {
     kpis,
     financeSeries: [
@@ -338,6 +513,12 @@ function generateMockDashboard(selectedSchool) {
       memos: recentMemos,
       events: upcoming,
     },
+    charts: {
+      gradeLevels,
+      departments,
+      studentGender,
+      attendanceWeek,
+    },
   }
 }
 
@@ -349,7 +530,7 @@ const formatNumber = (value) => new Intl.NumberFormat('en-US').format(value)
 const formatPercent = (value) =>
   `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value)}%`
 
-function StatCard({ title, value, helper, icon: Icon, delta, trend, href, format }) {
+function StatCard({ title, value, helper, delta, trend, href, format, watermark }) {
   const isPositive = delta >= 0
   const DeltaIcon = isPositive ? TrendingUp : TrendingDown
 
@@ -360,10 +541,9 @@ function StatCard({ title, value, helper, icon: Icon, delta, trend, href, format
   })()
 
   return (
-    <Card className='transition-colors hover:bg-muted/30'>
-      <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
+    <Card className='transition-colors hover:bg-muted/30' data-watermark={watermark}>
+      <CardHeader className='pb-2'>
         <CardTitle className='text-sm font-medium'>{title}</CardTitle>
-        {Icon ? <Icon className='h-4 w-4 text-muted-foreground' /> : null}
       </CardHeader>
       <CardContent className='space-y-3'>
         <div className='flex items-start justify-between gap-3'>
@@ -398,111 +578,230 @@ export default function AdminDashboard() {
   const data = useMemo(() => generateMockDashboard(selectedSchool), [selectedSchool])
 
   return (
-    <div className='space-y-6'>
-      <div className='flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between'>
-        <div>
-          <h2 className='text-2xl font-bold tracking-tight'>School Dashboard</h2>
-          <p className='text-muted-foreground'>
-            Overview for {selectedSchool?.school_name || 'your school'} (mock data)
+    <div className='space-y-6 p-4 md:p-6'>
+      {/* Header Section */}
+      <div className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
+        <div className='space-y-1'>
+          <h2 className='text-3xl font-bold tracking-tight'>School Dashboard</h2>
+          <p className='text-sm text-muted-foreground'>
+            {selectedSchool?.school_name || 'Your school'} - Comprehensive analytics and insights
           </p>
         </div>
         <div className='flex flex-wrap gap-2'>
           <Button asChild variant='outline' size='sm'>
-            <Link to='/admin/memo-board'>Open Memo Board</Link>
+            <Link to='/admin/memo-board'>
+              <Megaphone className='mr-2 h-4 w-4' />
+              Memos
+            </Link>
           </Button>
           <Button asChild variant='outline' size='sm'>
-            <Link to='/admin/hr/employee-profile'>Employee Profile</Link>
-          </Button>
-          <Button asChild variant='outline' size='sm'>
-            <Link to='/admin/settings/profile'>Settings</Link>
+            <Link to='/admin/calendar'>
+              <CalendarDays className='mr-2 h-4 w-4' />
+              Calendar
+            </Link>
           </Button>
         </div>
       </div>
 
-      <div className='grid gap-4 md:grid-cols-2 xl:grid-cols-4'>
-        {data.kpis.map((item) => (
+      {/* Top KPI Cards - Full Width Grid */}
+      <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
+        {data.kpis.slice(0, 4).map((item) => (
           <StatCard key={item.key} {...item} />
         ))}
       </div>
 
-      <div className='grid gap-4 lg:grid-cols-7'>
-        <Card className='lg:col-span-4'>
-          <CardHeader>
-            <CardTitle>Finance Overview</CardTitle>
-            <CardDescription>Collections vs expenses (last 12 months)</CardDescription>
-          </CardHeader>
-          <CardContent className='pt-0'>
-            <MiniLineChart series={data.financeSeries} />
-            <div className='mt-4 grid gap-2 text-sm sm:grid-cols-3'>
-              <div>
-                <div className='text-muted-foreground'>Receivables</div>
-                <div className='font-semibold'>{formatCurrency(data.quickStats.receivables)}</div>
+      {/* Masonry Layout - Main Content */}
+      <div className='grid gap-4 lg:grid-cols-3'>
+        {/* Column 1 - Left */}
+        <div className='space-y-4'>
+          {/* Finance Overview */}
+          <Card className='shadow-sm' data-watermark='FIN'>
+            <CardHeader>
+              <div className='flex items-center gap-2'>
+                <DollarSign className='h-5 w-5 text-primary' />
+                <CardTitle>Finance Overview</CardTitle>
               </div>
-              <div>
-                <div className='text-muted-foreground'>Expenses (MTD)</div>
-                <div className='font-semibold'>{formatCurrency(data.quickStats.expensesMtd)}</div>
+              <CardDescription>Collections vs expenses (12 months)</CardDescription>
+            </CardHeader>
+            <CardContent className='space-y-4'>
+              <MiniLineChart series={data.financeSeries} />
+              <div className='grid gap-3 text-sm'>
+                <div className='flex items-center justify-between rounded-lg border bg-muted/30 p-3'>
+                  <div className='text-muted-foreground'>Receivables</div>
+                  <div className='font-bold'>{formatCurrency(data.quickStats.receivables)}</div>
+                </div>
+                <div className='flex items-center justify-between rounded-lg border bg-muted/30 p-3'>
+                  <div className='text-muted-foreground'>Expenses (MTD)</div>
+                  <div className='font-bold'>{formatCurrency(data.quickStats.expensesMtd)}</div>
+                </div>
               </div>
-              <div>
-                <div className='text-muted-foreground'>Pending tasks</div>
-                <div className='font-semibold'>{formatNumber(data.quickStats.pendingTasks)}</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <Card className='lg:col-span-3'>
-          <CardHeader>
-            <CardTitle>Activity</CardTitle>
-            <CardDescription>What needs your attention</CardDescription>
-          </CardHeader>
-          <CardContent className='space-y-4'>
-            <div className='space-y-2'>
-              <div className='flex items-center justify-between'>
-                <div className='font-medium'>Upcoming events</div>
-                <Button asChild variant='ghost' size='sm' className='h-8 px-2'>
-                  <Link to='/admin/calendar'>Calendar</Link>
-                </Button>
+          {/* Student Demographics */}
+          <Card className='shadow-sm' data-watermark='DEMO'>
+            <CardHeader>
+              <div className='flex items-center gap-2'>
+                <Users className='h-5 w-5 text-primary' />
+                <CardTitle>Student Demographics</CardTitle>
+              </div>
+              <CardDescription>Gender distribution</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DonutChart data={data.charts.studentGender} size={140} />
+            </CardContent>
+          </Card>
+
+          {/* Attendance Trend */}
+          <Card className='shadow-sm' data-watermark='ATT'>
+            <CardHeader>
+              <div className='flex items-center gap-2'>
+                <Activity className='h-5 w-5 text-primary' />
+                <CardTitle>Weekly Attendance</CardTitle>
+              </div>
+              <CardDescription>This week's attendance rates</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <BarChart data={data.charts.attendanceWeek} height={180} />
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Column 2 - Middle */}
+        <div className='space-y-4'>
+          {/* Enrollment by Grade */}
+          <Card className='shadow-sm' data-watermark='ENR'>
+            <CardHeader>
+              <div className='flex items-center gap-2'>
+                <GraduationCap className='h-5 w-5 text-primary' />
+                <CardTitle>Enrollment by Grade</CardTitle>
+              </div>
+              <CardDescription>Student distribution across grade levels</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <BarChart data={data.charts.gradeLevels} height={220} />
+            </CardContent>
+          </Card>
+
+          {/* Quick Stats */}
+          <Card className='shadow-sm' data-watermark='STAT'>
+            <CardHeader>
+              <div className='flex items-center gap-2'>
+                <ClipboardList className='h-5 w-5 text-primary' />
+                <CardTitle>Quick Stats</CardTitle>
+              </div>
+              <CardDescription>Key metrics at a glance</CardDescription>
+            </CardHeader>
+            <CardContent className='space-y-4'>
+              <div className='grid grid-cols-2 gap-4'>
+                <ProgressRing
+                  value={data.quickStats.attendanceToday}
+                  max={100}
+                  label='Attendance'
+                  size={90}
+                />
+                <ProgressRing
+                  value={data.quickStats.pendingEnrollments}
+                  max={50}
+                  label='Pending'
+                  size={90}
+                />
               </div>
               <div className='space-y-2'>
-                {data.lists.events.map((event) => (
-                  <div key={event.id} className='flex items-start justify-between gap-3 text-sm'>
-                    <div className='min-w-0'>
-                      <div className='truncate font-medium'>{event.title}</div>
-                      <div className='text-xs text-muted-foreground'>{event.when}</div>
-                    </div>
-                    <Badge variant='secondary' className='shrink-0'>
-                      Event
-                    </Badge>
-                  </div>
-                ))}
+                <div className='flex items-center justify-between text-sm'>
+                  <span className='text-muted-foreground'>Pending Tasks</span>
+                  <span className='font-semibold'>{formatNumber(data.quickStats.pendingTasks)}</span>
+                </div>
+                <Progress value={(data.quickStats.pendingTasks / 20) * 100} className='h-2' />
               </div>
-            </div>
+            </CardContent>
+          </Card>
 
-            <Separator />
+          {/* More KPIs */}
+          {data.kpis.slice(4, 6).map((item) => (
+            <StatCard key={item.key} {...item} />
+          ))}
+        </div>
 
-            <div className='space-y-2'>
+        {/* Column 3 - Right */}
+        <div className='space-y-4'>
+          {/* Department Breakdown */}
+          <Card className='shadow-sm' data-watermark='DEPT'>
+            <CardHeader>
+              <div className='flex items-center gap-2'>
+                <UsersRound className='h-5 w-5 text-primary' />
+                <CardTitle>Department Breakdown</CardTitle>
+              </div>
+              <CardDescription>Employee distribution</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DonutChart data={data.charts.departments} size={140} />
+            </CardContent>
+          </Card>
+
+          {/* Activity Feed */}
+          <Card className='shadow-sm' data-watermark='EVENT'>
+            <CardHeader>
               <div className='flex items-center justify-between'>
-                <div className='font-medium'>Recent memos</div>
-                <Button asChild variant='ghost' size='sm' className='h-8 px-2'>
-                  <Link to='/admin/memo-board'>View</Link>
+                <div>
+                  <CardTitle>Upcoming Events</CardTitle>
+                  <CardDescription>Next 30 days</CardDescription>
+                </div>
+                <Button asChild variant='ghost' size='sm'>
+                  <Link to='/admin/calendar'>View all</Link>
                 </Button>
               </div>
-              <div className='space-y-2'>
-                {data.lists.memos.map((memo) => (
-                  <div key={memo.id} className='flex items-start justify-between gap-3 text-sm'>
-                    <div className='min-w-0'>
-                      <div className='truncate font-medium'>{memo.title}</div>
-                      <div className='text-xs text-muted-foreground'>{memo.audience}</div>
-                    </div>
-                    <Badge variant='outline' className='shrink-0'>
-                      Memo
-                    </Badge>
+            </CardHeader>
+            <CardContent className='space-y-3'>
+              {data.lists.events.map((event) => (
+                <div
+                  key={event.id}
+                  className='flex items-start gap-3 rounded-lg border bg-muted/20 p-3 transition-colors hover:bg-muted/40'
+                >
+                  <CalendarDays className='mt-0.5 h-4 w-4 text-primary' />
+                  <div className='flex-1 space-y-1'>
+                    <div className='text-sm font-medium'>{event.title}</div>
+                    <div className='text-xs text-muted-foreground'>{event.when}</div>
                   </div>
-                ))}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Recent Memos */}
+          <Card className='shadow-sm' data-watermark='MEMO'>
+            <CardHeader>
+              <div className='flex items-center justify-between'>
+                <div>
+                  <CardTitle>Recent Memos</CardTitle>
+                  <CardDescription>Latest communications</CardDescription>
+                </div>
+                <Button asChild variant='ghost' size='sm'>
+                  <Link to='/admin/memo-board'>View all</Link>
+                </Button>
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardHeader>
+            <CardContent className='space-y-3'>
+              {data.lists.memos.map((memo) => (
+                <div
+                  key={memo.id}
+                  className='flex items-start gap-3 rounded-lg border bg-muted/20 p-3 transition-colors hover:bg-muted/40'
+                >
+                  <Megaphone className='mt-0.5 h-4 w-4 text-primary' />
+                  <div className='flex-1 space-y-1'>
+                    <div className='text-sm font-medium'>{memo.title}</div>
+                    <div className='text-xs text-muted-foreground'>{memo.audience}</div>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Additional KPIs */}
+          {data.kpis.slice(6, 8).map((item) => (
+            <StatCard key={item.key} {...item} />
+          ))}
+        </div>
       </div>
     </div>
   )

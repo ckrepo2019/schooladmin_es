@@ -1,0 +1,854 @@
+import mysql from 'mysql2/promise';
+
+const getSchoolConnection = async (schoolDbConfig) => {
+  const connection = await mysql.createConnection({
+    host: process.env.DB_HOST || 'localhost',
+    user: schoolDbConfig.db_username,
+    password: schoolDbConfig.db_password || '',
+    database: schoolDbConfig.db_name,
+  });
+  return connection;
+};
+
+const toNumber = (value) => Number(value) || 0;
+
+const getSchoolInfo = async (db) => {
+  const [rows] = await db.execute('SELECT shssetup FROM schoolinfo LIMIT 1');
+  return rows[0] || null;
+};
+
+const getBalForwardClassId = async (db) => {
+  const [rows] = await db.execute('SELECT classid FROM balforwardsetup LIMIT 1');
+  return rows[0]?.classid || null;
+};
+
+const getAcademicPrograms = async (db) => {
+  const [rows] = await db.execute(
+    'SELECT id, progname FROM academicprogram ORDER BY id'
+  );
+  return rows;
+};
+
+const getGradeLevels = async (db) => {
+  const [rows] = await db.execute(
+    'SELECT id, levelname, acadprogid FROM gradelevel WHERE deleted = 0 ORDER BY levelname'
+  );
+  return rows;
+};
+
+const getSchoolYears = async (db, limit = 4) => {
+  const [rows] = await db.execute(
+    'SELECT id, sydesc, sdate, edate, isactive FROM sy WHERE isactive IN (0, 1) ORDER BY sydesc DESC'
+  );
+  return rows.slice(0, Math.max(1, limit));
+};
+
+const getEnrolledStudentIds = async (db, syid, semid, programId) => {
+  if (!syid && !semid) {
+    return null;
+  }
+
+  const ids = new Set();
+  const includeBasic = !programId || [2, 3, 4].includes(programId);
+  const includeShs = !programId || programId === 5;
+  const includeCollege = !programId || programId === 6;
+  const includeTesda = !programId || programId === 7;
+
+  const addIds = async (table, useSem) => {
+    const params = [];
+    let query = `SELECT studid FROM ${table} WHERE deleted = 0`;
+    if (syid) {
+      query += ' AND syid = ?';
+      params.push(syid);
+    }
+    if (useSem && semid) {
+      query += ' AND semid = ?';
+      params.push(semid);
+    }
+
+    const [rows] = await db.execute(query, params);
+    rows.forEach((row) => ids.add(row.studid));
+  };
+
+  if (includeBasic) {
+    await addIds('enrolledstud', false);
+  }
+  if (includeShs) {
+    await addIds('sh_enrolledstud', true);
+  }
+  if (includeCollege) {
+    await addIds('college_enrolledstud', true);
+  }
+  if (includeTesda) {
+    await addIds('tesda_enrolledstud', false);
+  }
+
+  return Array.from(ids);
+};
+
+const getEnrollmentTable = (levelid) => {
+  if (levelid === 14 || levelid === 15) return 'sh_enrolledstud';
+  if (levelid >= 17 && levelid <= 25) return 'college_enrolledstud';
+  if (levelid === 26) return 'tesda_enrolledstud';
+  return 'enrolledstud';
+};
+
+const useSemesterForLevel = (levelid) => levelid >= 14 && levelid <= 25;
+
+const getFeesIdForStudent = async (db, student, syid, semid) => {
+  if (student.feesid) {
+    return student.feesid;
+  }
+
+  if (!syid) {
+    return null;
+  }
+
+  const enrollTable = getEnrollmentTable(student.levelid);
+  const params = [student.id, syid];
+  let query = `SELECT feesid FROM ${enrollTable} WHERE studid = ? AND syid = ? AND deleted = 0`;
+
+  if (useSemesterForLevel(student.levelid) && semid) {
+    query += ' AND semid = ?';
+    params.push(semid);
+  }
+
+  query += ' ORDER BY id DESC LIMIT 1';
+  const [rows] = await db.execute(query, params);
+  return rows[0]?.feesid || null;
+};
+
+const getStudentUnits = async (db, studid, syid, semid, levelid) => {
+  if (!(levelid >= 17 && levelid <= 25)) {
+    return 0;
+  }
+
+  const [rows] = await db.execute(
+    `SELECT cp.lecunits, cp.labunits, cp.subjectID
+     FROM college_loadsubject cls
+     JOIN college_prospectus cp ON cls.subjectID = cp.id
+     WHERE cls.studid = ? AND cls.syid = ? AND cls.semid = ? AND cls.deleted = 0`,
+    [studid, syid, semid]
+  );
+
+  let totalUnits = 0;
+  for (const unit of rows) {
+    const [assessmentRows] = await db.execute(
+      'SELECT id FROM tuition_assessmentunit WHERE subjid = ? AND deleted = 0 LIMIT 1',
+      [unit.subjectID]
+    );
+    if (assessmentRows.length > 0) {
+      totalUnits += 1.5;
+    } else {
+      totalUnits += toNumber(unit.lecunits) + toNumber(unit.labunits);
+    }
+  }
+
+  return totalUnits;
+};
+
+const getStudentSubjectCount = async (db, studid, syid, semid, levelid) => {
+  if (levelid >= 17 && levelid <= 25) {
+    const [rows] = await db.execute(
+      `SELECT COUNT(*) as count
+       FROM college_loadsubject
+       WHERE studid = ? AND syid = ? AND semid = ? AND deleted = 0`,
+      [studid, syid, semid]
+    );
+    return toNumber(rows[0]?.count);
+  }
+
+  if (levelid === 14 || levelid === 15) {
+    const [rows] = await db.execute(
+      `SELECT COUNT(*) as count
+       FROM sh_studsched ss
+       JOIN sh_classsched sc ON ss.schedid = sc.id
+       WHERE ss.studid = ? AND ss.deleted = 0 AND sc.deleted = 0
+         AND sc.syid = ? AND sc.semid = ?`,
+      [studid, syid, semid]
+    );
+    return toNumber(rows[0]?.count);
+  }
+
+  return 0;
+};
+
+const fetchTuitionFees = async (db, student, syid, semid, schoolInfo) => {
+  if (!syid) {
+    return [];
+  }
+
+  const feesId = await getFeesIdForStudent(db, student, syid, semid);
+  const params = [syid];
+  let query = `
+    SELECT
+      td.classificationid as classid,
+      td.amount,
+      td.istuition,
+      td.persubj
+    FROM tuitionheader th
+    JOIN tuitiondetail td ON th.id = td.headerid
+    JOIN itemclassification ic ON td.classificationid = ic.id
+    WHERE th.syid = ?
+      AND th.deleted = 0
+      AND td.deleted = 0
+      AND ic.deleted = 0
+  `;
+
+  if (student.levelid === 14 || student.levelid === 15) {
+    if (semid) {
+      query += ' AND th.semid = ?';
+      params.push(semid);
+    }
+  } else if (student.levelid >= 17 && student.levelid <= 25) {
+    if (semid) {
+      query += ' AND th.semid = ?';
+      params.push(semid);
+    }
+  }
+
+  if (feesId) {
+    query += ' AND th.id = ?';
+    params.push(feesId);
+  } else {
+    query += ' AND th.levelid = ?';
+    params.push(student.levelid);
+
+    const hasCourse = !!student.courseid;
+    const hasStrand = !!student.strandid;
+    const conditions = [];
+
+    if (hasCourse) {
+      conditions.push('th.courseid = ?');
+      params.push(student.courseid);
+    }
+
+    if (hasStrand) {
+      conditions.push('th.strandid = ?');
+      params.push(student.strandid);
+    }
+
+    conditions.push('(th.courseid IS NULL AND th.strandid IS NULL)');
+    query += ` AND (${conditions.join(' OR ')})`;
+  }
+
+  const [rows] = await db.execute(query, params);
+  return rows;
+};
+
+const applyDiscounts = async (db, student, syid, semid, totalsByClass) => {
+  if (!syid || Object.keys(totalsByClass).length === 0) {
+    return totalsByClass;
+  }
+
+  const params = [student.id, syid];
+  let query = `
+    SELECT classid, SUM(discamount) as amount
+    FROM studdiscounts
+    WHERE studid = ? AND syid = ? AND deleted = 0 AND posted = 1
+  `;
+
+  if (useSemesterForLevel(student.levelid) && semid) {
+    query += ' AND semid = ?';
+    params.push(semid);
+  }
+
+  query += ' GROUP BY classid';
+  const [rows] = await db.execute(query, params);
+
+  const updated = { ...totalsByClass };
+  rows.forEach((row) => {
+    const classid = row.classid;
+    const discount = toNumber(row.amount);
+    if (!updated[classid]) return;
+    const applied = Math.min(updated[classid], discount);
+    updated[classid] = Math.max(updated[classid] - applied, 0);
+  });
+
+  return updated;
+};
+
+const fetchBookEntries = async (db, student, syid, semid) => {
+  if (!syid) return 0;
+
+  const params = [student.id, syid];
+  let query = `
+    SELECT SUM(amount) as amount
+    FROM bookentries
+    WHERE studid = ? AND syid = ? AND deleted = 0
+  `;
+
+  if (useSemesterForLevel(student.levelid) && semid) {
+    query += ' AND semid = ?';
+    params.push(semid);
+  }
+
+  const [rows] = await db.execute(query, params);
+  return toNumber(rows[0]?.amount);
+};
+
+const fetchAdjustmentCharges = async (db, student, syid, semid) => {
+  if (!syid) return 0;
+
+  const params = [student.id, syid];
+  let query = `
+    SELECT SUM(a.amount) as amount
+    FROM adjustmentdetails ad
+    JOIN adjustments a ON ad.headerid = a.id
+    WHERE ad.studid = ? AND a.syid = ? AND ad.deleted = 0 AND a.deleted = 0
+      AND a.isdebit = 1
+  `;
+
+  if (useSemesterForLevel(student.levelid) && semid) {
+    query += ' AND a.semid = ?';
+    params.push(semid);
+  }
+
+  const [rows] = await db.execute(query, params);
+  return toNumber(rows[0]?.amount);
+};
+
+const fetchOldAccountCharges = async (db, student, syid, semid, balClassId) => {
+  if (!syid || !balClassId) return 0;
+
+  const params = [student.id, syid, balClassId];
+  let query = `
+    SELECT SUM(amount) as amount
+    FROM studledger
+    WHERE studid = ? AND syid = ? AND classid = ? AND amount > 0 AND deleted = 0 AND void = 0
+  `;
+
+  if (useSemesterForLevel(student.levelid) && semid) {
+    query += ' AND semid = ?';
+    params.push(semid);
+  }
+
+  const [rows] = await db.execute(query, params);
+  return toNumber(rows[0]?.amount);
+};
+
+const fetchStudentPayments = async (db, student, syid, semid, balClassId) => {
+  if (!syid) return 0;
+
+  const paymentParams = [student.id, syid];
+  let paymentQuery = `
+    SELECT SUM(amountpaid) as amount
+    FROM chrngtrans
+    WHERE studid = ? AND syid = ? AND cancelled = 0
+  `;
+
+  if (useSemesterForLevel(student.levelid) && semid) {
+    paymentQuery += ' AND semid = ?';
+    paymentParams.push(semid);
+  }
+
+  const [paymentRows] = await db.execute(paymentQuery, paymentParams);
+  const payments = toNumber(paymentRows[0]?.amount);
+
+  let oldPayments = 0;
+  if (balClassId) {
+    const oldParams = [student.id, syid, balClassId];
+    let oldQuery = `
+      SELECT SUM(payment) as amount
+      FROM studledger
+      WHERE studid = ? AND syid = ? AND classid = ? AND deleted = 0 AND payment > 0
+    `;
+
+    if (useSemesterForLevel(student.levelid) && semid) {
+      oldQuery += ' AND semid = ?';
+      oldParams.push(semid);
+    }
+
+    const [oldRows] = await db.execute(oldQuery, oldParams);
+    oldPayments = toNumber(oldRows[0]?.amount);
+  }
+
+  const creditParams = [student.id, syid];
+  let creditQuery = `
+    SELECT SUM(a.amount) as amount
+    FROM adjustmentdetails ad
+    JOIN adjustments a ON ad.headerid = a.id
+    WHERE ad.studid = ? AND a.syid = ? AND ad.deleted = 0 AND a.deleted = 0
+      AND a.iscredit = 1
+  `;
+
+  if (useSemesterForLevel(student.levelid) && semid) {
+    creditQuery += ' AND a.semid = ?';
+    creditParams.push(semid);
+  }
+
+  const [creditRows] = await db.execute(creditQuery, creditParams);
+  const creditAdjustments = toNumber(creditRows[0]?.amount);
+
+  return payments + oldPayments + creditAdjustments;
+};
+
+const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balClassId) => {
+  if (!syid) {
+    return {
+      total_fees: 0,
+      total_paid: 0,
+      balance: 0,
+      overpayment: 0,
+    };
+  }
+
+  const tuitionRows = await fetchTuitionFees(db, student, syid, semid, schoolInfo);
+  const totalsByClass = {};
+
+  let units = 0;
+  let subjectCount = 0;
+  const needsUnits = tuitionRows.some((row) => Number(row.istuition) === 1);
+  const needsSubjects = tuitionRows.some((row) => Number(row.persubj) === 1);
+
+  if (needsUnits) {
+    units = await getStudentUnits(db, student.id, syid, semid, student.levelid);
+  }
+  if (needsSubjects) {
+    subjectCount = await getStudentSubjectCount(db, student.id, syid, semid, student.levelid);
+  }
+
+  tuitionRows.forEach((row) => {
+    let amount = toNumber(row.amount);
+    if (Number(row.istuition) === 1 && units > 0) {
+      amount = amount * units;
+    } else if (Number(row.persubj) === 1 && subjectCount > 0) {
+      amount = amount * subjectCount;
+    }
+
+    if (amount <= 0) return;
+    totalsByClass[row.classid] = (totalsByClass[row.classid] || 0) + amount;
+  });
+
+  const discountedTotals = await applyDiscounts(db, student, syid, semid, totalsByClass);
+  const tuitionTotal = Object.values(discountedTotals).reduce(
+    (sum, value) => sum + toNumber(value),
+    0
+  );
+
+  const adjustmentCharges = await fetchAdjustmentCharges(db, student, syid, semid);
+  const bookEntries = await fetchBookEntries(db, student, syid, semid);
+  const oldAccounts = await fetchOldAccountCharges(db, student, syid, semid, balClassId);
+
+  const totalFees = tuitionTotal + adjustmentCharges + bookEntries + oldAccounts;
+  const totalPaid = await fetchStudentPayments(db, student, syid, semid, balClassId);
+
+  const balance = Math.max(totalFees - totalPaid, 0);
+  const overpayment = Math.max(totalPaid - totalFees, 0);
+
+  return {
+    total_fees: Number(totalFees.toFixed(2)),
+    total_paid: Number(totalPaid.toFixed(2)),
+    balance: Number(balance.toFixed(2)),
+    overpayment: Number(overpayment.toFixed(2)),
+  };
+};
+
+const buildSummary = (studentsWithTotals) => {
+  const summary = {
+    total_receivable: 0,
+    total_students: studentsWithTotals.length,
+    students_with_balance: 0,
+    average_balance: 0,
+    total_overpayment: 0,
+    overpaid_count: 0,
+  };
+
+  const byProgram = new Map();
+  const byGradeLevel = new Map();
+  const tiers = [
+    { label: '0 - 1k', min: 0, max: 1000, count: 0, total_balance: 0 },
+    { label: '1k - 5k', min: 1000, max: 5000, count: 0, total_balance: 0 },
+    { label: '5k - 20k', min: 5000, max: 20000, count: 0, total_balance: 0 },
+    { label: '20k+', min: 20000, max: Infinity, count: 0, total_balance: 0 },
+  ];
+
+  studentsWithTotals.forEach((student) => {
+    const balance = toNumber(student.balance);
+    const overpayment = toNumber(student.overpayment);
+
+    if (balance > 0) {
+      summary.total_receivable += balance;
+      summary.students_with_balance += 1;
+
+      const tier = tiers.find((item) => balance >= item.min && balance < item.max);
+      if (tier) {
+        tier.count += 1;
+        tier.total_balance += balance;
+      }
+    }
+
+    if (overpayment > 0) {
+      summary.total_overpayment += overpayment;
+      summary.overpaid_count += 1;
+    }
+
+    const programKey = student.acadprog_id || 'unknown';
+    const programEntry = byProgram.get(programKey) || {
+      program_id: student.acadprog_id || null,
+      program_name: student.program_name || 'Unknown Program',
+      total_balance: 0,
+      student_count: 0,
+    };
+    programEntry.total_balance += balance;
+    programEntry.student_count += 1;
+    byProgram.set(programKey, programEntry);
+
+    const levelKey = student.levelid || 'unknown';
+    const levelEntry = byGradeLevel.get(levelKey) || {
+      level_id: student.levelid || null,
+      level_name: student.level_name || 'Unknown Level',
+      total_balance: 0,
+      student_count: 0,
+    };
+    levelEntry.total_balance += balance;
+    levelEntry.student_count += 1;
+    byGradeLevel.set(levelKey, levelEntry);
+  });
+
+  summary.average_balance =
+    summary.students_with_balance > 0
+      ? Number((summary.total_receivable / summary.students_with_balance).toFixed(2))
+      : 0;
+  summary.total_receivable = Number(summary.total_receivable.toFixed(2));
+  summary.total_overpayment = Number(summary.total_overpayment.toFixed(2));
+
+  const programData = Array.from(byProgram.values()).map((entry) => ({
+    ...entry,
+    total_balance: Number(entry.total_balance.toFixed(2)),
+    avg_balance:
+      entry.student_count > 0
+        ? Number((entry.total_balance / entry.student_count).toFixed(2))
+        : 0,
+  }));
+
+  const gradeLevelData = Array.from(byGradeLevel.values()).map((entry) => ({
+    ...entry,
+    total_balance: Number(entry.total_balance.toFixed(2)),
+    avg_balance:
+      entry.student_count > 0
+        ? Number((entry.total_balance / entry.student_count).toFixed(2))
+        : 0,
+  }));
+
+  const balanceTiers = tiers.map((tier) => ({
+    ...tier,
+    total_balance: Number(tier.total_balance.toFixed(2)),
+  }));
+
+  return { summary, byProgram: programData, byGradeLevel: gradeLevelData, balanceTiers };
+};
+
+const fetchStudents = async (db, { syid, semid, programId, levelId, search }) => {
+  const enrolledIds = await getEnrolledStudentIds(
+    db,
+    syid,
+    semid,
+    programId ? Number(programId) : null
+  );
+
+  let query = `
+    SELECT
+      si.id,
+      si.sid,
+      si.firstname,
+      si.middlename,
+      si.lastname,
+      si.levelid,
+      si.courseid,
+      si.strandid,
+      si.feesid,
+      gl.levelname as level_name,
+      gl.acadprogid as acadprog_id,
+      ap.progname as program_name
+    FROM studinfo si
+    LEFT JOIN gradelevel gl ON gl.id = si.levelid
+    LEFT JOIN academicprogram ap ON ap.id = gl.acadprogid
+    WHERE si.deleted = 0
+  `;
+
+  const params = [];
+
+  if (programId) {
+    query += ' AND gl.acadprogid = ?';
+    params.push(programId);
+  }
+
+  if (levelId) {
+    query += ' AND si.levelid = ?';
+    params.push(levelId);
+  }
+
+  if (enrolledIds && enrolledIds.length > 0) {
+    const placeholders = enrolledIds.map(() => '?').join(',');
+    query += ` AND si.id IN (${placeholders})`;
+    params.push(...enrolledIds);
+  } else if (enrolledIds && enrolledIds.length === 0) {
+    return [];
+  }
+
+  if (search) {
+    query += ` AND (
+      si.sid LIKE ?
+      OR CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) LIKE ?
+    )`;
+    const searchTerm = `%${search}%`;
+    params.push(searchTerm, searchTerm);
+  }
+
+  query += ' ORDER BY si.lastname, si.firstname';
+
+  const [students] = await db.execute(query, params);
+  return students;
+};
+
+const buildSyComparison = async (db, options) => {
+  const { programId, levelId, semid, schoolInfo, balClassId } = options;
+  const schoolYears = await getSchoolYears(db, 4);
+  const comparison = [];
+
+  for (const sy of schoolYears) {
+    const students = await fetchStudents(db, {
+      syid: sy.id,
+      semid,
+      programId,
+      levelId,
+      search: null,
+    });
+
+    let totalReceivable = 0;
+    let studentsWithBalance = 0;
+
+    for (const student of students) {
+      const totals = await calculateStudentTotals(
+        db,
+        student,
+        sy.id,
+        semid,
+        schoolInfo,
+        balClassId
+      );
+
+      if (Number(totals.total_fees) <= 0) {
+        continue;
+      }
+
+      if (totals.balance > 0) {
+        totalReceivable += totals.balance;
+        studentsWithBalance += 1;
+      }
+    }
+
+    comparison.push({
+      syid: sy.id,
+      sydesc: sy.sydesc,
+      total_receivable: Number(totalReceivable.toFixed(2)),
+      students_with_balance: studentsWithBalance,
+    });
+  }
+
+  return comparison;
+};
+
+export const getAccountReceivableFilters = async (req, res) => {
+  try {
+    const { schoolDbConfig } = req.body;
+    if (!schoolDbConfig) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'School database configuration is required',
+      });
+    }
+
+    const db = await getSchoolConnection(schoolDbConfig);
+    const [programs, gradeLevels] = await Promise.all([
+      getAcademicPrograms(db),
+      getGradeLevels(db),
+    ]);
+    await db.end();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        programs,
+        gradeLevels,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching receivables filters:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch receivables filters',
+      error: error.message,
+    });
+  }
+};
+
+export const getAccountReceivableList = async (req, res) => {
+  try {
+    const {
+      schoolDbConfig,
+      syid,
+      semid,
+      programId,
+      levelId,
+      search,
+      page = 1,
+      perPage = 200,
+    } = req.body;
+
+    if (!schoolDbConfig) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'School database configuration is required',
+      });
+    }
+
+    const db = await getSchoolConnection(schoolDbConfig);
+    const schoolInfo = await getSchoolInfo(db);
+    const balClassId = await getBalForwardClassId(db);
+
+    const students = await fetchStudents(db, {
+      syid,
+      semid,
+      programId: programId ? Number(programId) : null,
+      levelId: levelId ? Number(levelId) : null,
+      search: search || null,
+    });
+
+    const startIndex = (Number(page) - 1) * Number(perPage);
+    const pagedStudents = students.slice(startIndex, startIndex + Number(perPage));
+
+    const studentsWithTotals = [];
+    for (const student of pagedStudents) {
+      const fullName = [student.lastname, student.firstname, student.middlename]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      const totals = await calculateStudentTotals(
+        db,
+        student,
+        syid,
+        semid,
+        schoolInfo,
+        balClassId
+      );
+
+      if (Number(totals.total_fees) <= 0) {
+        continue;
+      }
+
+      studentsWithTotals.push({
+        ...student,
+        full_name: fullName || student.sid || 'Unknown',
+        ...totals,
+      });
+    }
+
+    await db.end();
+
+    res.status(200).json({
+      status: 'success',
+      data: studentsWithTotals,
+      meta: {
+        total: studentsWithTotals.length,
+        page: Number(page),
+        per_page: Number(perPage),
+        pages: Math.ceil(studentsWithTotals.length / Math.max(1, Number(perPage))),
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching account receivables list:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch account receivables list',
+      error: error.message,
+    });
+  }
+};
+
+export const getAccountReceivableSummary = async (req, res) => {
+  try {
+    const { schoolDbConfig, syid, semid, programId, levelId, search } = req.body;
+
+    if (!schoolDbConfig) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'School database configuration is required',
+      });
+    }
+
+    const db = await getSchoolConnection(schoolDbConfig);
+    const schoolInfo = await getSchoolInfo(db);
+    const balClassId = await getBalForwardClassId(db);
+
+    const students = await fetchStudents(db, {
+      syid,
+      semid,
+      programId: programId ? Number(programId) : null,
+      levelId: levelId ? Number(levelId) : null,
+      search: search || null,
+    });
+
+    const bySchoolYear = await buildSyComparison(db, {
+      programId: programId ? Number(programId) : null,
+      levelId: levelId ? Number(levelId) : null,
+      semid,
+      schoolInfo,
+      balClassId,
+    });
+
+    if (!students.length) {
+      await db.end();
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          summary: {
+            total_receivable: 0,
+            total_students: 0,
+            students_with_balance: 0,
+            average_balance: 0,
+            total_overpayment: 0,
+            overpaid_count: 0,
+          },
+          byProgram: [],
+          byGradeLevel: [],
+          balanceTiers: [],
+          bySchoolYear,
+        },
+      });
+    }
+    const studentsWithTotals = [];
+
+    for (const student of students) {
+      const totals = await calculateStudentTotals(
+        db,
+        student,
+        syid,
+        semid,
+        schoolInfo,
+        balClassId
+      );
+      studentsWithTotals.push({
+        ...student,
+        ...totals,
+      });
+    }
+
+    const summaryData = buildSummary(studentsWithTotals);
+    summaryData.bySchoolYear = bySchoolYear;
+    await db.end();
+
+    res.status(200).json({
+      status: 'success',
+      data: summaryData,
+    });
+  } catch (error) {
+    console.error('Error fetching account receivables summary:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch account receivables summary',
+      error: error.message,
+    });
+  }
+};

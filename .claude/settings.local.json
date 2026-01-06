@@ -15,7 +15,31 @@
       "Bash(del \"C:\\\\laragon\\\\www\\\\schooladmin_es\\\\backend\\\\test-s3-upload.js\")",
       "Bash(rm:*)",
       "Bash(tree:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE enrolledstud;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE sh_enrolledstud;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE college_enrolledstud;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE semester;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE sy;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE studentstatus;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE studinfo;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT * FROM semester LIMIT 5;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT * FROM sy ORDER BY id DESC LIMIT 5;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT * FROM studentstatus;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT COUNT\\(*\\) as total FROM enrolledstud WHERE deleted = 0;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT COUNT\\(*\\) as total FROM sh_enrolledstud WHERE deleted = 0;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT COUNT\\(*\\) as total FROM college_enrolledstud WHERE deleted = 0;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE chrngtrans;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE chrngcashtrans;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE chrngtransitems;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE paymenttype;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE items;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE itemclassification;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; DESCRIBE chrngterminals;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\":*)",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT * FROM paymenttype WHERE deleted = 0;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT * FROM chrngterminals LIMIT 5;\")",
+      "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT COUNT\\(*\\) as total FROM chrngtrans WHERE cancelled = 0;\")"
     ]
   }
 }

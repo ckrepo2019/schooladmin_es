@@ -11,6 +11,34 @@ import {
   updateMemo,
   deleteMemo,
 } from '../controllers/memoController.js';
+import {
+  getEnrollmentSummary,
+  getEnrollmentList,
+  getSchoolYears,
+  getSemesters,
+} from '../controllers/enrollmentController.js';
+import {
+  getCashierSummary,
+  getTransactionList,
+  getPaymentTypes,
+  getTerminals,
+} from '../controllers/cashierController.js';
+import {
+  getAccountReceivableFilters,
+  getAccountReceivableList,
+  getAccountReceivableSummary,
+} from '../controllers/accountReceivablesController.js';
+import {
+  getDailyCashSummary,
+  getDailyCashItems,
+} from '../controllers/dailyCashProgressController.js';
+import { getSchoolCalendarEvents } from '../controllers/calendarController.js';
+import {
+  getMonthlySummary,
+  getMonthlySummaryItems,
+  getYearlySummary,
+  getYearlySummaryTable,
+} from '../controllers/summaryController.js';
 import { verifyToken } from '../middleware/auth.js';
 import { uploadMemoFile } from '../middleware/upload.js';
 
@@ -87,5 +115,66 @@ router.put('/memos/:id', verifyToken, updateMemo);
 
 // DELETE /api/admin/memos/:id - Delete memo
 router.delete('/memos/:id', verifyToken, deleteMemo);
+
+// Enrollment Routes (all require authentication)
+// POST /api/admin/enrollment/summary - Get enrollment summary statistics
+router.post('/enrollment/summary', verifyToken, getEnrollmentSummary);
+
+// POST /api/admin/enrollment/list - Get detailed enrollment list
+router.post('/enrollment/list', verifyToken, getEnrollmentList);
+
+// POST /api/admin/enrollment/school-years - Get available school years
+router.post('/enrollment/school-years', verifyToken, getSchoolYears);
+
+// POST /api/admin/enrollment/semesters - Get available semesters
+router.post('/enrollment/semesters', verifyToken, getSemesters);
+
+// Cashier Transaction Routes (all require authentication)
+// POST /api/admin/cashier/summary - Get cashier summary statistics
+router.post('/cashier/summary', verifyToken, getCashierSummary);
+
+// POST /api/admin/cashier/transactions - Get transaction list
+router.post('/cashier/transactions', verifyToken, getTransactionList);
+
+// POST /api/admin/cashier/payment-types - Get payment types
+router.post('/cashier/payment-types', verifyToken, getPaymentTypes);
+
+// POST /api/admin/cashier/terminals - Get terminals
+router.post('/cashier/terminals', verifyToken, getTerminals);
+
+// Accounts Receivable Routes (all require authentication)
+// POST /api/admin/receivables/filters - Get account receivables filters
+router.post('/receivables/filters', verifyToken, getAccountReceivableFilters);
+
+// POST /api/admin/receivables/summary - Get account receivables summary
+router.post('/receivables/summary', verifyToken, getAccountReceivableSummary);
+
+// POST /api/admin/receivables/list - Get account receivables list
+router.post('/receivables/list', verifyToken, getAccountReceivableList);
+
+// Daily Cash Progress Routes (all require authentication)
+// POST /api/admin/cash-progress/summary - Get daily cash summary
+router.post('/cash-progress/summary', verifyToken, getDailyCashSummary);
+
+// POST /api/admin/cash-progress/items - Get daily cash items
+router.post('/cash-progress/items', verifyToken, getDailyCashItems);
+
+// Calendar Routes (all require authentication)
+// POST /api/admin/calendar/events - Get school calendar events
+router.post('/calendar/events', verifyToken, getSchoolCalendarEvents);
+
+// Monthly Summary Routes (all require authentication)
+// POST /api/admin/monthly-summary/summary - Get monthly summary analytics
+router.post('/monthly-summary/summary', verifyToken, getMonthlySummary);
+
+// POST /api/admin/monthly-summary/items - Get monthly summary items
+router.post('/monthly-summary/items', verifyToken, getMonthlySummaryItems);
+
+// Yearly Summary Routes (all require authentication)
+// POST /api/admin/yearly-summary/summary - Get yearly summary analytics
+router.post('/yearly-summary/summary', verifyToken, getYearlySummary);
+
+// POST /api/admin/yearly-summary/table - Get yearly summary table data
+router.post('/yearly-summary/table', verifyToken, getYearlySummaryTable);
 
 export default router;

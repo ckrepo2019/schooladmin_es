@@ -35,7 +35,7 @@ export default function DatabaseTest() {
 
   return (
     <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4">
-      <Card className="w-full max-w-md">
+      <Card className="w-full max-w-md" data-watermark="DB">
         <CardHeader>
           <CardTitle>Database Connection Test</CardTitle>
           <CardDescription>

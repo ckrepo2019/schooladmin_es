@@ -6,6 +6,7 @@ import {
   Building2,
 } from 'lucide-react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { useDialogs } from '@/context/dialogs-provider'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,15 +25,34 @@ import {
 export function NavUser({ user, selectedSchool }) {
   const { isMobile } = useSidebar()
   const navigate = useNavigate()
+  const { confirm: openConfirm } = useDialogs()
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const confirmed = await openConfirm({
+      title: 'Sign out?',
+      description: 'You will be redirected to the login page.',
+      confirmText: 'Sign out',
+      cancelText: 'Cancel',
+    })
+
+    if (!confirmed) return
+
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     localStorage.removeItem('selectedSchool')
     navigate('/login')
   }
 
-  const handleSwitchSchool = () => {
+  const handleSwitchSchool = async () => {
+    const confirmed = await openConfirm({
+      title: 'Switch school?',
+      description: 'You will be taken back to the school selection page.',
+      confirmText: 'Switch',
+      cancelText: 'Cancel',
+    })
+
+    if (!confirmed) return
+
     localStorage.removeItem('selectedSchool')
     navigate('/admin/select-school')
   }

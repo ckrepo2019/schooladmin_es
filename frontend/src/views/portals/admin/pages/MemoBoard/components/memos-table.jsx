@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { apiUrl } from '@/lib/api'
+import { useDialogs } from '@/context/dialogs-provider'
 import {
   flexRender,
   getCoreRowModel,
@@ -38,6 +39,7 @@ export function MemosTable({ data, onAddMemo, onEditMemo, onRefresh, selectedSch
   const [viewDialogMemo, setViewDialogMemo] = useState(null)
   const [visibilityDialogMemo, setVisibilityDialogMemo] = useState(null)
   const { setDeleteDialogMemo } = useMemos()
+  const { confirm: openConfirm } = useDialogs()
 
   const handleViewMemo = (memo) => {
     setViewDialogMemo(memo)
@@ -59,9 +61,15 @@ export function MemosTable({ data, onAddMemo, onEditMemo, onRefresh, selectedSch
       return
     }
 
-    const confirmMessage = `Are you sure you want to delete ${selectedMemos.length} memo(s)? This action cannot be undone.`
+    const confirmed = await openConfirm({
+      variant: 'destructive',
+      title: `Delete ${selectedMemos.length} memo${selectedMemos.length === 1 ? '' : 's'}?`,
+      description: 'This action cannot be undone.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+    })
 
-    if (!window.confirm(confirmMessage)) {
+    if (!confirmed) {
       return
     }
 
@@ -160,7 +168,7 @@ export function MemosTable({ data, onAddMemo, onEditMemo, onRefresh, selectedSch
             </div>
           </div>
 
-          <div className='rounded-md border'>
+          <div className='rounded-md border bg-background'>
             <Table>
               <TableHeader>
                 {table.getHeaderGroups().map((headerGroup) => (

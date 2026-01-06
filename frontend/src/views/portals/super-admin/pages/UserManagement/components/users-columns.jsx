@@ -1,7 +1,46 @@
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Copy, Eye, EyeOff } from 'lucide-react'
+import { toast } from 'sonner'
 import { DataTableColumnHeader } from './data-table-column-header'
 import { DataTableRowActions } from './data-table-row-actions'
+import { useState } from 'react'
+
+function PasswordCell({ password }) {
+  const [showPassword, setShowPassword] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(password)
+    toast.success('Password copied to clipboard')
+  }
+
+  return (
+    <div className='flex items-center gap-2'>
+      <span className='max-w-[120px] truncate font-mono text-sm'>
+        {showPassword ? password : '••••••••'}
+      </span>
+      <div className='flex gap-1'>
+        <Button
+          variant='ghost'
+          size='icon'
+          className='h-7 w-7'
+          onClick={() => setShowPassword(!showPassword)}
+        >
+          {showPassword ? <EyeOff className='h-3.5 w-3.5' /> : <Eye className='h-3.5 w-3.5' />}
+        </Button>
+        <Button
+          variant='ghost'
+          size='icon'
+          className='h-7 w-7'
+          onClick={handleCopy}
+        >
+          <Copy className='h-3.5 w-3.5' />
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 export const columns = [
   {
@@ -51,6 +90,17 @@ export const columns = [
         </div>
       )
     },
+  },
+  {
+    accessorKey: 'password_str',
+    header: ({ column }) => (
+      <DataTableColumnHeader column={column} title='Password' />
+    ),
+    cell: ({ row }) => {
+      const password = row.getValue('password_str')
+      return password ? <PasswordCell password={password} /> : <span className='text-muted-foreground text-sm'>-</span>
+    },
+    enableSorting: false,
   },
   {
     accessorKey: 'schools',

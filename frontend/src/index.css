@@ -4,6 +4,13 @@
 @custom-variant dark (&:is(.dark *));
 
 @layer base {
+  html.light {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+
   * {
     @apply border-border outline-ring/50;
     scrollbar-width: thin;
@@ -14,6 +21,139 @@
   }
   body {
     @apply min-h-svh w-full bg-background text-foreground has-[div[data-variant='inset']]:bg-sidebar;
+  }
+
+  [data-slot='card'] {
+    position: relative;
+    isolation: isolate;
+  }
+
+  [data-slot='card'][data-watermark]::after {
+    content: '';
+    position: absolute;
+    right: 1rem;
+    bottom: 0.75rem;
+    width: clamp(2.75rem, 6vw, 6.5rem);
+    height: clamp(2.75rem, 6vw, 6.5rem);
+    color: var(--foreground);
+    opacity: 0.07;
+    pointer-events: none;
+    z-index: 0;
+    background-color: currentColor;
+    mask-image: var(--card-watermark-icon);
+    mask-repeat: no-repeat;
+    mask-size: contain;
+    mask-position: center;
+    -webkit-mask-image: var(--card-watermark-icon);
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-size: contain;
+    -webkit-mask-position: center;
+  }
+
+  [data-slot='card'][data-watermark] {
+    --card-watermark-icon: var(--wm-info);
+  }
+
+  [data-slot='card'][data-watermark='PESO'],
+  [data-slot='card'][data-watermark='FIN'],
+  [data-slot='card'][data-watermark='CASH'],
+  [data-slot='card'][data-watermark='AR'] {
+    --card-watermark-icon: var(--wm-money);
+  }
+
+  [data-slot='card'][data-watermark='TXN'],
+  [data-slot='card'][data-watermark='STAT'],
+  [data-slot='card'][data-watermark='SESS'],
+  [data-slot='card'][data-watermark='ATT'],
+  [data-slot='card'][data-watermark='ACTION'] {
+    --card-watermark-icon: var(--wm-activity);
+  }
+
+  [data-slot='card'][data-watermark='OVER'] {
+    --card-watermark-icon: var(--wm-alert);
+  }
+
+  [data-slot='card'][data-watermark='TYPE'],
+  [data-slot='card'][data-watermark='TABLE'],
+  [data-slot='card'][data-watermark='LIST'],
+  [data-slot='card'][data-watermark='LEVELS'],
+  [data-slot='card'][data-watermark='TASK'] {
+    --card-watermark-icon: var(--wm-list);
+  }
+
+  [data-slot='card'][data-watermark='CLASS'],
+  [data-slot='card'][data-watermark='DEPT'],
+  [data-slot='card'][data-watermark='FOLD'],
+  [data-slot='card'][data-watermark='DIR'] {
+    --card-watermark-icon: var(--wm-folder);
+  }
+
+  [data-slot='card'][data-watermark='CAL'],
+  [data-slot='card'][data-watermark='DATE'],
+  [data-slot='card'][data-watermark='DAILY'],
+  [data-slot='card'][data-watermark='EVENT'] {
+    --card-watermark-icon: var(--wm-calendar);
+  }
+
+  [data-slot='card'][data-watermark='FILTER'] {
+    --card-watermark-icon: var(--wm-filter);
+  }
+
+  [data-slot='card'][data-watermark='USERS'],
+  [data-slot='card'][data-watermark='HR'],
+  [data-slot='card'][data-watermark='PROFILE'],
+  [data-slot='card'][data-watermark='USER'] {
+    --card-watermark-icon: var(--wm-users);
+  }
+
+  [data-slot='card'][data-watermark='ACCOUNT'],
+  [data-slot='card'][data-watermark='ROLE'],
+  [data-slot='card'][data-watermark='REG'] {
+    --card-watermark-icon: var(--wm-id);
+  }
+
+  [data-slot='card'][data-watermark='PASS'] {
+    --card-watermark-icon: var(--wm-lock);
+  }
+
+  [data-slot='card'][data-watermark='LOGOUT'] {
+    --card-watermark-icon: var(--wm-logout);
+  }
+
+  [data-slot='card'][data-watermark='MEMO'],
+  [data-slot='card'][data-watermark='NOTICE'],
+  [data-slot='card'][data-watermark='FILES'] {
+    --card-watermark-icon: var(--wm-doc);
+  }
+
+  [data-slot='card'][data-watermark='STOR'],
+  [data-slot='card'][data-watermark='DB'] {
+    --card-watermark-icon: var(--wm-database);
+  }
+
+  [data-slot='card'][data-watermark='HELP'],
+  [data-slot='card'][data-watermark='STATUS'],
+  [data-slot='card'][data-watermark='DEMO'] {
+    --card-watermark-icon: var(--wm-info);
+  }
+
+  [data-slot='card'][data-watermark='SCHOOL'] {
+    --card-watermark-icon: var(--wm-school);
+  }
+
+  [data-slot='card'][data-watermark='ENR'],
+  [data-slot='card'][data-watermark='TOTAL'],
+  [data-slot='card'][data-watermark='GRADE'],
+  [data-slot='card'][data-watermark='SHS'],
+  [data-slot='card'][data-watermark='COLLEGE'],
+  [data-slot='card'][data-watermark='GS'],
+  [data-slot='card'][data-watermark='COL'] {
+    --card-watermark-icon: var(--wm-graduation);
+  }
+
+  [data-slot='card'] > * {
+    position: relative;
+    z-index: 1;
   }
 
   /* Override Radix scroll locking for sticky headers */
@@ -34,6 +174,13 @@
     textarea {
       font-size: 16px !important;
     }
+  }
+
+  /* Better defaults for native controls (un-styled selects, date inputs, etc.) */
+  html.dark select,
+  html.dark option {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
   }
 }
 
@@ -66,6 +213,29 @@
   --sidebar-accent-foreground: var(--accent-foreground);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
+
+  --chart-1: var(--primary);
+  --chart-2: oklch(0.631 0.184 32.486);
+  --chart-3: oklch(0.712 0.145 194.766);
+  --chart-4: oklch(0.596 0.177 268.363);
+  --chart-5: oklch(0.665 0.159 124.403);
+
+  --wm-money: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='6' width='18' height='12' rx='2'/><circle cx='12' cy='12' r='3'/></svg>");
+  --wm-alert: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z'/><line x1='12' y1='9' x2='12' y2='13'/><line x1='12' y1='17' x2='12.01' y2='17'/></svg>");
+  --wm-list: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='4' cy='7' r='1.5'/><circle cx='4' cy='12' r='1.5'/><circle cx='4' cy='17' r='1.5'/><line x1='7' y1='7' x2='20' y2='7'/><line x1='7' y1='12' x2='20' y2='12'/><line x1='7' y1='17' x2='20' y2='17'/></svg>");
+  --wm-calendar: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='5' width='18' height='16' rx='2'/><line x1='3' y1='9' x2='21' y2='9'/><line x1='8' y1='3' x2='8' y2='7'/><line x1='16' y1='3' x2='16' y2='7'/></svg>");
+  --wm-filter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 6h16l-6 7v5l-4 2v-7z'/></svg>");
+  --wm-users: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='8' r='3'/><path d='M4 20c1.5-4 5-6 8-6s6.5 2 8 6'/></svg>");
+  --wm-graduation: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 9l9-4 9 4-9 4-9-4z'/><path d='M7 11v4c0 2 10 2 10 0v-4'/><path d='M21 10v5'/></svg>");
+  --wm-activity: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='3 12 7 12 10 5 14 19 17 12 21 12'/></svg>");
+  --wm-id: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='6' width='18' height='12' rx='2'/><circle cx='8' cy='12' r='2'/><line x1='12' y1='10' x2='18' y2='10'/><line x1='12' y1='14' x2='18' y2='14'/></svg>");
+  --wm-folder: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 7h6l2 2h10a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z'/></svg>");
+  --wm-database: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><ellipse cx='12' cy='5' rx='7' ry='3'/><path d='M5 5v10c0 1.7 3.1 3 7 3s7-1.3 7-3V5'/><path d='M5 10c0 1.7 3.1 3 7 3s7-1.3 7-3'/><path d='M5 15c0 1.7 3.1 3 7 3s7-1.3 7-3'/></svg>");
+  --wm-info: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><line x1='12' y1='10' x2='12' y2='16'/><circle cx='12' cy='7' r='1'/></svg>");
+  --wm-logout: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M9 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4'/><polyline points='15 8 19 12 15 16'/><line x1='19' y1='12' x2='9' y2='12'/></svg>");
+  --wm-doc: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='6' y='3' width='12' height='18' rx='2'/><line x1='9' y1='8' x2='15' y2='8'/><line x1='9' y1='12' x2='15' y2='12'/><line x1='9' y1='16' x2='13' y2='16'/></svg>");
+  --wm-school: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 9l9-4 9 4'/><path d='M5 10v9'/><path d='M9 10v9'/><path d='M15 10v9'/><path d='M19 10v9'/><path d='M2 19h20'/></svg>");
+  --wm-lock: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='5' y='11' width='14' height='9' rx='2'/><path d='M8 11V8a4 4 0 0 1 8 0v3'/></svg>");
 }
 
 .dark {
@@ -87,6 +257,12 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.551 0.027 264.364);
+
+  --chart-1: var(--primary);
+  --chart-2: oklch(0.531 0.164 32.486);
+  --chart-3: oklch(0.612 0.125 194.766);
+  --chart-4: oklch(0.496 0.157 268.363);
+  --chart-5: oklch(0.565 0.139 124.403);
 }
 
 @theme inline {
@@ -120,6 +296,11 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
 }
 
 @utility no-scrollbar {

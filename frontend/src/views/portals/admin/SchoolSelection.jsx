@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { apiUrl } from '@/lib/api'
 import ckLogo from '@/assets/ck-logo.png'
 import { setFavicon } from '@/lib/metadata'
+import { useDialogs } from '@/context/dialogs-provider'
 import {
   Card,
   CardContent,
@@ -19,6 +20,7 @@ export default function SchoolSelection() {
   const [schools, setSchools] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const user = JSON.parse(localStorage.getItem('user') || '{}')
+  const { confirm: openConfirm } = useDialogs()
   const appTitle = import.meta.env.VITE_APP_TITLE || 'School Admin'
 
   useEffect(() => {
@@ -29,6 +31,77 @@ export default function SchoolSelection() {
     document.title = `Select School | ${appTitle}`
     setFavicon(ckLogo)
   }, [appTitle])
+
+  useEffect(() => {
+    let lastKey = null
+    let lastKeyTime = 0
+
+    const restoreSuperAdmin = async () => {
+      const sessionRaw = localStorage.getItem('superadmin_session')
+      if (!sessionRaw) return
+
+      const session = JSON.parse(sessionRaw)
+      if (!session?.token || !session?.user) return
+
+      const applySession = (token, user) => {
+        localStorage.setItem('token', token)
+        localStorage.setItem('user', JSON.stringify(user))
+        localStorage.removeItem('impersonation_active')
+        localStorage.removeItem('superadmin_session')
+        localStorage.removeItem('selectedSchool')
+        navigate('/super-admin/dashboard', { replace: true })
+      }
+
+      try {
+        const response = await fetch(apiUrl('/api/super-admin/restore-session'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.token}`,
+          },
+          credentials: 'include',
+        })
+
+        const result = await response.json()
+        if (response.ok && result.status === 'success') {
+          applySession(result.data.token || session.token, result.data.user || session.user)
+          return
+        }
+      } catch (error) {
+        console.error('Restore session error:', error)
+      }
+
+      applySession(session.token, session.user)
+    }
+
+    const handleKeyDown = (event) => {
+      if (localStorage.getItem('impersonation_active') !== 'true') return
+
+      const key = event.key.toLowerCase()
+      if (key === 'g') {
+        lastKey = 'g'
+        lastKeyTime = Date.now()
+        return
+      }
+
+      if (key === '1' && lastKey === 'g' && Date.now() - lastKeyTime <= 1000) {
+        restoreSuperAdmin()
+        lastKey = null
+        lastKeyTime = 0
+        return
+      }
+
+      if (key !== 'g') {
+        lastKey = null
+        lastKeyTime = 0
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [navigate])
 
   const fetchUserSchools = async () => {
     try {
@@ -59,7 +132,7 @@ export default function SchoolSelection() {
       } else {
         toast.error(data.message || 'Failed to fetch schools')
       }
-    } catch (error) {
+    } catch {
       toast.error('An error occurred while fetching schools')
     } finally {
       setIsLoading(false)
@@ -75,7 +148,16 @@ export default function SchoolSelection() {
     toast.success(`Switched to ${school.school_name}`)
   }
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const confirmed = await openConfirm({
+      title: 'Logout?',
+      description: 'You will be redirected to the login page.',
+      confirmText: 'Logout',
+      cancelText: 'Cancel',
+    })
+
+    if (!confirmed) return
+
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     localStorage.removeItem('selectedSchool')
@@ -110,6 +192,7 @@ export default function SchoolSelection() {
             <Card
               key={school.id}
               className='cursor-pointer transition-all hover:shadow-lg hover:border-primary'
+              data-watermark='SCHOOL'
               onClick={() => handleSelectSchool(school)}
             >
               <CardHeader>
@@ -159,7 +242,7 @@ export default function SchoolSelection() {
         </div>
 
         {schools.length === 0 && !isLoading && (
-          <Card className='border-dashed'>
+          <Card className='border-dashed' data-watermark='NOTICE'>
             <CardContent className='flex flex-col items-center justify-center py-12'>
               <School className='h-12 w-12 text-muted-foreground mb-4' />
               <p className='text-muted-foreground text-center'>

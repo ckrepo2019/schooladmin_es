@@ -165,3 +165,153 @@ export const createUser = async (req, res) => {
     });
   }
 };
+
+/**
+ * Change username
+ */
+export const changeUsername = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { newUsername, currentPassword } = req.body;
+
+    // Validate input
+    if (!newUsername || !currentPassword) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'New username and current password are required'
+      });
+    }
+
+    // Get current user
+    const [users] = await db.query(
+      'SELECT * FROM users WHERE id = ? LIMIT 1',
+      [userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    const user = users[0];
+
+    // Verify current password
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Current password is incorrect'
+      });
+    }
+
+    // Check if new username already exists
+    const [existingUsers] = await db.query(
+      'SELECT id FROM users WHERE username = ? AND id != ? LIMIT 1',
+      [newUsername, userId]
+    );
+
+    if (existingUsers.length > 0) {
+      return res.status(409).json({
+        status: 'error',
+        message: 'Username already taken'
+      });
+    }
+
+    // Update username
+    await db.query(
+      'UPDATE users SET username = ?, updated_at = NOW() WHERE id = ?',
+      [newUsername, userId]
+    );
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Username updated successfully',
+      data: {
+        username: newUsername
+      }
+    });
+  } catch (error) {
+    console.error('Change username error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Change password
+ */
+export const changePassword = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { currentPassword, newPassword } = req.body;
+
+    // Validate input
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Current password and new password are required'
+      });
+    }
+
+    // Validate new password strength (minimum 6 characters)
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'New password must be at least 6 characters long'
+      });
+    }
+
+    // Get current user
+    const [users] = await db.query(
+      'SELECT * FROM users WHERE id = ? LIMIT 1',
+      [userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    const user = users[0];
+
+    // Verify current password
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Current password is incorrect'
+      });
+    }
+
+    // Hash new password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+    // Update password
+    await db.query(
+      'UPDATE users SET password = ?, password_str = ?, updated_at = NOW() WHERE id = ?',
+      [hashedPassword, newPassword, userId]
+    );
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Password updated successfully'
+    });
+  } catch (error) {
+    console.error('Change password error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};

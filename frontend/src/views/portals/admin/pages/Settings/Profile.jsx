@@ -7,7 +7,7 @@ export default function SettingsProfile() {
   const user = useMemo(() => JSON.parse(localStorage.getItem('user') || '{}'), [])
 
   return (
-    <Card>
+    <Card data-watermark='PROFILE'>
       <CardHeader>
         <CardTitle>Profile</CardTitle>
         <CardDescription>Your basic account information.</CardDescription>
@@ -29,4 +29,3 @@ export default function SettingsProfile() {
     </Card>
   )
 }
-

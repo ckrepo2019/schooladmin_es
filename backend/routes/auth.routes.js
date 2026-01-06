@@ -1,5 +1,6 @@
 import express from 'express';
 import { verifyToken } from '../middleware/auth.js';
+import { changeUsername, changePassword } from '../controllers/userController.js';
 import db from '../config/db.js';
 
 const router = express.Router();
@@ -39,7 +40,7 @@ router.get('/me', verifyToken, async (req, res) => {
     let schools = [];
     if (users[0].role === 'admin') {
       const [schoolsData] = await db.query(
-        `SELECT s.id, s.school_name, s.abbrv, s.image_logo, s.address, s.db_name
+        `SELECT s.id, s.school_name, s.abbrv, s.image_logo, s.address, s.db_name, s.db_username, s.db_password
          FROM schools s
          INNER JOIN user_schools us ON s.id = us.school_id
          WHERE us.user_id = ?`,
@@ -72,6 +73,12 @@ router.post('/logout', (req, res) => {
     message: 'Logged out successfully'
   });
 });
+
+// PUT /api/auth/change-username - Change username
+router.put('/change-username', verifyToken, changeUsername);
+
+// PUT /api/auth/change-password - Change password
+router.put('/change-password', verifyToken, changePassword);
 
 // Global auth routes (can be used by any user type)
 // Add more global auth routes here (e.g., password reset, email verification, etc.)

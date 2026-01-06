@@ -15,6 +15,8 @@ import {
   updateUser,
   deleteUser,
   updatePassword,
+  switchUserAccount,
+  restoreSuperAdminSession,
 } from '../controllers/userManagementController.js';
 import {
   getAllBucketFiles,
@@ -118,6 +120,12 @@ router.delete('/users/:id', verifyToken, verifySuperAdmin, deleteUser);
 
 // PUT /api/super-admin/users/:id/password - Update user password
 router.put('/users/:id/password', verifyToken, verifySuperAdmin, updatePassword);
+
+// POST /api/super-admin/users/:id/switch - Switch account (impersonate user)
+router.post('/users/:id/switch', verifyToken, verifySuperAdmin, switchUserAccount);
+
+// POST /api/super-admin/restore-session - Restore super-admin cookie
+router.post('/restore-session', verifyToken, verifySuperAdmin, restoreSuperAdminSession);
 
 // Bucket Monitoring Routes (all require authentication and super-admin role)
 // GET /api/super-admin/bucket/files - Get all files in bucket

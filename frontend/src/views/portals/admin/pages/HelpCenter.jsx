@@ -8,7 +8,7 @@ export default function HelpCenter() {
         <p className='text-muted-foreground'>Get help and find answers.</p>
       </div>
 
-      <Card>
+      <Card data-watermark='HELP'>
         <CardHeader>
           <CardTitle>Coming Soon</CardTitle>
           <CardDescription>
@@ -22,4 +22,3 @@ export default function HelpCenter() {
     </div>
   )
 }
-

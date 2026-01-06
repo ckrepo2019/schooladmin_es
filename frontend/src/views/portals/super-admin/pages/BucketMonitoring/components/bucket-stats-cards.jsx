@@ -1,5 +1,4 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Files, HardDrive, Folder } from 'lucide-react'
 
 export function BucketStatsCards({ stats }) {
   if (!stats) return null
@@ -7,10 +6,9 @@ export function BucketStatsCards({ stats }) {
   return (
     <div className='grid gap-4 md:grid-cols-3 lg:grid-cols-4'>
       {/* Total Files Card */}
-      <Card>
-        <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
+      <Card data-watermark='FILES'>
+        <CardHeader className='pb-2'>
           <CardTitle className='text-sm font-medium'>Total Files</CardTitle>
-          <Files className='h-4 w-4 text-muted-foreground' />
         </CardHeader>
         <CardContent>
           <div className='text-2xl font-bold'>{stats.totalFiles}</div>
@@ -18,10 +16,9 @@ export function BucketStatsCards({ stats }) {
       </Card>
 
       {/* Total Storage Card */}
-      <Card>
-        <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
+      <Card data-watermark='STOR'>
+        <CardHeader className='pb-2'>
           <CardTitle className='text-sm font-medium'>Total Storage</CardTitle>
-          <HardDrive className='h-4 w-4 text-muted-foreground' />
         </CardHeader>
         <CardContent>
           <div className='text-2xl font-bold'>{stats.totalSizeFormatted}</div>
@@ -29,10 +26,9 @@ export function BucketStatsCards({ stats }) {
       </Card>
 
       {/* Folders Card */}
-      <Card>
-        <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
+      <Card data-watermark='FOLD'>
+        <CardHeader className='pb-2'>
           <CardTitle className='text-sm font-medium'>Folders</CardTitle>
-          <Folder className='h-4 w-4 text-muted-foreground' />
         </CardHeader>
         <CardContent>
           <div className='text-2xl font-bold'>{stats.folderBreakdown?.length || 0}</div>
@@ -40,7 +36,7 @@ export function BucketStatsCards({ stats }) {
       </Card>
 
       {/* Folder Breakdown Card */}
-      <Card className='md:col-span-3 lg:col-span-1'>
+      <Card className='md:col-span-3 lg:col-span-1' data-watermark='DIR'>
         <CardHeader>
           <CardTitle className='text-sm font-medium'>By Folder</CardTitle>
         </CardHeader>

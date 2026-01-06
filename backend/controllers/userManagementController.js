@@ -1,4 +1,5 @@
 import bcrypt from 'bcrypt'
+import jwt from 'jsonwebtoken'
 import db from '../config/db.js'
 
 // Helper function to generate user_id
@@ -25,7 +26,7 @@ const generateUserId = async () => {
 export const getAllUsers = async (req, res) => {
   try {
     const [users] = await db.query(
-      `SELECT u.id, u.user_id, u.username, u.role, u.created_at, u.updated_at,
+      `SELECT u.id, u.user_id, u.username, u.password_str, u.role, u.created_at, u.updated_at,
        GROUP_CONCAT(s.id) as school_ids,
        GROUP_CONCAT(s.school_name) as school_names
        FROM users u
@@ -346,6 +347,112 @@ export const updatePassword = async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Failed to update password',
+    })
+  }
+}
+
+// Restore super-admin session cookie
+export const restoreSuperAdminSession = async (req, res) => {
+  try {
+    const token = jwt.sign(
+      {
+        id: req.user.id,
+        user_id: req.user.user_id,
+        username: req.user.username,
+        role: req.user.role,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    )
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    })
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Super-admin session restored',
+      data: {
+        token,
+        user: {
+          id: req.user.id,
+          user_id: req.user.user_id,
+          username: req.user.username,
+          role: req.user.role,
+        },
+      },
+    })
+  } catch (error) {
+    console.error('Error restoring super-admin session:', error)
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to restore super-admin session',
+    })
+  }
+}
+
+// Switch account (super-admin impersonation)
+export const switchUserAccount = async (req, res) => {
+  try {
+    const { id } = req.params
+
+    const [users] = await db.query(
+      'SELECT * FROM users WHERE id = ? LIMIT 1',
+      [id]
+    )
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found',
+      })
+    }
+
+    const user = users[0]
+
+    if (user.role === 'super-admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Cannot switch to super-admin user',
+      })
+    }
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        user_id: user.user_id,
+        username: user.username,
+        role: user.role,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    )
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    })
+
+    const { password, password_str, ...userData } = user
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Switched account successfully',
+      data: {
+        user: userData,
+        token,
+      },
+    })
+  } catch (error) {
+    console.error('Error switching account:', error)
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to switch account',
     })
   }
 }

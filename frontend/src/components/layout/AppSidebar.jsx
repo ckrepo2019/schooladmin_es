@@ -219,7 +219,7 @@ export function AppSidebar({ user, selectedSchool }) {
             <span className='text-lg font-semibold'>
               {user?.role === 'admin' && selectedSchool?.abbrv
                 ? selectedSchool.abbrv
-                : 'School Admin'}
+                : 'System Admin'}
             </span>
           </div>
         </div>

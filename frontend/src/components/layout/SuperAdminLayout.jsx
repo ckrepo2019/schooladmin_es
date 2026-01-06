@@ -1,6 +1,5 @@
 import { Outlet } from 'react-router-dom'
 import { useEffect } from 'react'
-import { Toaster } from 'sonner'
 import { cn } from '@/lib/utils'
 import { getCookie } from '@/lib/cookies'
 import ckLogo from '@/assets/ck-logo.png'
@@ -20,7 +19,7 @@ export function SuperAdminLayout() {
   const appTitle = import.meta.env.VITE_APP_TITLE || 'School Admin'
 
   useEffect(() => {
-    document.title = `SYS ADMIN | ${appTitle.toUpperCase()}`
+    document.title = `System Administrator`
     setFavicon(ckLogo)
   }, [appTitle])
 
@@ -49,11 +48,10 @@ export function SuperAdminLayout() {
                   <h1 className='text-lg font-semibold'>Dashboard</h1>
                 </div>
               </Header>
-              <Main id='content'>
+              <Main id='content' fluid>
                 <Outlet />
               </Main>
             </SidebarInset>
-            <Toaster richColors position='top-right' />
           </SidebarProvider>
         </SearchProvider>
       </LayoutProvider>

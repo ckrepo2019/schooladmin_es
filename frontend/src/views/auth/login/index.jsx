@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Loader2, LogIn } from 'lucide-react'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { apiUrl } from '@/lib/api'
 import ckLogo from '@/assets/ck-logo.png'
@@ -29,7 +30,7 @@ const formSchema = z.object({
   password: z
     .string()
     .min(1, 'Please enter your password')
-    .min(7, 'Password must be at least 7 characters long'),
+    .min(6, 'Password must be at least 6 characters long'),
 })
 
 export default function Login() {
@@ -38,7 +39,7 @@ export default function Login() {
   const appTitle = import.meta.env.VITE_APP_TITLE || 'School Admin'
 
   useEffect(() => {
-    document.title = `ESSENTIEL | ${appTitle.toUpperCase()}`
+    document.title = `Essentiel | ${appTitle}`
     setFavicon(ckLogo)
   }, [appTitle])
 
@@ -52,6 +53,7 @@ export default function Login() {
 
   async function onSubmit(data) {
     setIsLoading(true)
+    let didNavigate = false
 
     try {
       const response = await fetch(apiUrl('/api/super-admin/login'), {
@@ -70,22 +72,31 @@ export default function Login() {
         localStorage.setItem('token', result.data.token)
         localStorage.setItem('user', JSON.stringify(result.data.user))
 
+        toast.success('Welcome back!', {
+          description: 'Login successful.',
+        })
+
         // Navigate to appropriate dashboard
         if (result.data.user.role === 'super-admin') {
+          didNavigate = true
           navigate('/super-admin/dashboard')
         } else {
           // For admin users, go to school selection first
+          didNavigate = true
           navigate('/admin/select-school')
         }
       } else {
-        // Show error message
-        alert(result.message || 'Login failed')
-        setIsLoading(false)
+        toast.error('Login failed', {
+          description: result.message || 'Invalid credentials.',
+        })
       }
     } catch (error) {
       console.error('Login error:', error)
-      alert('Failed to connect to server')
-      setIsLoading(false)
+      toast.error('Connection error', {
+        description: 'Failed to connect to server.',
+      })
+    } finally {
+      if (!didNavigate) setIsLoading(false)
     }
   }
 

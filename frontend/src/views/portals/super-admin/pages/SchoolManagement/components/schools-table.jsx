@@ -50,9 +50,9 @@ export function SchoolsTable({ data }) {
   })
 
   return (
-    <div className='space-y-4'>
+      <div className='space-y-4'>
       <DataTableToolbar table={table} />
-      <div className='rounded-md border'>
+      <div className='rounded-md border bg-background'>
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (

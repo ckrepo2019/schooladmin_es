@@ -12,21 +12,32 @@ import SchoolSelection from '@/views/portals/admin/SchoolSelection'
 import AdminDashboard from '@/views/portals/admin/pages/Dashboard'
 import EmployeeProfile from '@/views/portals/admin/pages/EmployeeProfile'
 import MemoBoard from '@/views/portals/admin/pages/MemoBoard'
+import AdminCalendar from '@/views/portals/admin/pages/Calendar'
 import AdminSettings from '@/views/portals/admin/pages/Settings'
 import SettingsProfile from '@/views/portals/admin/pages/Settings/Profile'
 import SettingsAccount from '@/views/portals/admin/pages/Settings/Account'
 import HelpCenter from '@/views/portals/admin/pages/HelpCenter'
+import EnrollmentSummary from '@/views/portals/admin/pages/EnrollmentSummary'
+import CashierTransactions from '@/views/portals/admin/pages/CashierTransactions'
+import AccountReceivables from '@/views/portals/admin/pages/AccountReceivables'
+import DailyCashProgress from '@/views/portals/admin/pages/DailyCashProgress'
+import MonthlySummary from '@/views/portals/admin/pages/MonthlySummary'
+import YearlySummary from '@/views/portals/admin/pages/YearlySummary'
 
 // Protected Route Component
 function ProtectedRoute({ children, requiredRole }) {
   const token = localStorage.getItem('token')
   const user = JSON.parse(localStorage.getItem('user') || '{}')
+  const isImpersonating = localStorage.getItem('impersonation_active') === 'true'
 
   if (!token) {
     return <Navigate to="/login" replace />
   }
 
   if (requiredRole && user.role !== requiredRole) {
+    if (isImpersonating && requiredRole === 'super-admin' && user.role === 'admin') {
+      return <Navigate to="/admin/select-school" replace />
+    }
     return <Navigate to="/login" replace />
   }
 
@@ -76,7 +87,7 @@ function App() {
         >
           <Route path="dashboard" element={<AdminDashboard />} />
           <Route path="profile" element={<div className="p-6">Profile - Coming Soon</div>} />
-          <Route path="calendar" element={<div className="p-6">Calendar - Coming Soon</div>} />
+          <Route path="calendar" element={<AdminCalendar />} />
           <Route path="memo-board" element={<MemoBoard />} />
           <Route path="settings" element={<AdminSettings />}>
             <Route index element={<Navigate to="profile" replace />} />
@@ -86,11 +97,11 @@ function App() {
           <Route path="help-center" element={<HelpCenter />} />
 
           {/* Finance Reports */}
-          <Route path="finance/cashier-transactions" element={<div className="p-6">Cashier Transactions - Coming Soon</div>} />
-          <Route path="finance/daily-cash-progress" element={<div className="p-6">Daily Cash Progress Report - Coming Soon</div>} />
-          <Route path="finance/monthly-summary" element={<div className="p-6">Monthly Summary - Coming Soon</div>} />
-          <Route path="finance/yearly-summary" element={<div className="p-6">Yearly Summary - Coming Soon</div>} />
-          <Route path="finance/account-receivables" element={<div className="p-6">Account Receivables - Coming Soon</div>} />
+          <Route path="finance/cashier-transactions" element={<CashierTransactions />} />
+          <Route path="finance/daily-cash-progress" element={<DailyCashProgress />} />
+          <Route path="finance/monthly-summary" element={<MonthlySummary />} />
+          <Route path="finance/yearly-summary" element={<YearlySummary />} />
+          <Route path="finance/account-receivables" element={<AccountReceivables />} />
           <Route path="finance/expenses-monitoring" element={<div className="p-6">Expenses Monitoring - Coming Soon</div>} />
 
           {/* HR Reports */}
@@ -98,7 +109,7 @@ function App() {
           <Route path="hr/employee-attendance" element={<div className="p-6">Employee Attendance - Coming Soon</div>} />
 
           {/* Registrar Reports */}
-          <Route path="registrar/enrollment-summary" element={<div className="p-6">Enrollment Summary - Coming Soon</div>} />
+          <Route path="registrar/enrollment-summary" element={<EnrollmentSummary />} />
         </Route>
 
         {/* Old Routes */}
