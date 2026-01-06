@@ -2,7 +2,6 @@ import {
   LayoutDashboard,
   Users,
   School,
-  User,
   Calendar,
   Megaphone,
   DollarSign,
@@ -70,11 +69,6 @@ const getNavItems = (role) => {
       title: 'School Dashboard',
       url: '/admin/dashboard',
       icon: LayoutDashboard,
-    },
-    {
-      title: 'Profile',
-      url: '/admin/profile',
-      icon: User,
     },
     {
       title: 'Calendar',

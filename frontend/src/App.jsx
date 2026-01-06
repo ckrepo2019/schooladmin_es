@@ -86,7 +86,6 @@ function App() {
           }
         >
           <Route path="dashboard" element={<AdminDashboard />} />
-          <Route path="profile" element={<div className="p-6">Profile - Coming Soon</div>} />
           <Route path="calendar" element={<AdminCalendar />} />
           <Route path="memo-board" element={<MemoBoard />} />
           <Route path="settings" element={<AdminSettings />}>
