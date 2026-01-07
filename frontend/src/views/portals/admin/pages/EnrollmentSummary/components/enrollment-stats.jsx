@@ -11,20 +11,21 @@ export function EnrollmentStats({ summary, breakdown }) {
     return null;
   }
 
-  const { gradeSchool, shs, college } = summary;
+  const { kindergarten, elementary, highSchool, gradeSchool, shs, college } = summary;
+  const hasSplitPrograms = Boolean(kindergarten || elementary || highSchool);
 
-  const levelStats = [
+  const splitLevels = [
     {
-      key: 'gradeschool',
-      title: 'Grade School',
+      key: 'kindergarten',
+      title: kindergarten?.programName || 'Kindergarten',
       icon: BookOpen,
-      watermark: 'GRADE',
-      total: toNumber(gradeSchool?.total),
-      enrolled: toNumber(gradeSchool?.enrolled),
-      late: toNumber(gradeSchool?.late_enrollment),
-      dropped: toNumber(gradeSchool?.dropped_out),
-      withdrawn: toNumber(gradeSchool?.withdrawn),
-      breakdown: breakdown?.gradeSchoolByLevel || [],
+      watermark: 'ENR',
+      statusWatermark: 'ENR',
+      total: toNumber(kindergarten?.total),
+      enrolled: toNumber(kindergarten?.enrolled),
+      late: toNumber(kindergarten?.late_enrollment),
+      dropped: toNumber(kindergarten?.dropped_out),
+      withdrawn: toNumber(kindergarten?.withdrawn),
       colors: {
         text: 'text-emerald-600',
         bg: 'bg-emerald-500/10',
@@ -32,16 +33,50 @@ export function EnrollmentStats({ summary, breakdown }) {
       },
     },
     {
+      key: 'elementary',
+      title: elementary?.programName || 'Elementary',
+      icon: BookOpen,
+      watermark: 'GRADE',
+      statusWatermark: 'GRADE',
+      total: toNumber(elementary?.total),
+      enrolled: toNumber(elementary?.enrolled),
+      late: toNumber(elementary?.late_enrollment),
+      dropped: toNumber(elementary?.dropped_out),
+      withdrawn: toNumber(elementary?.withdrawn),
+      colors: {
+        text: 'text-sky-600',
+        bg: 'bg-sky-500/10',
+        bar: 'bg-sky-500',
+      },
+    },
+    {
+      key: 'highSchool',
+      title: highSchool?.programName || 'High School',
+      icon: Users,
+      watermark: 'GS',
+      statusWatermark: 'GS',
+      total: toNumber(highSchool?.total),
+      enrolled: toNumber(highSchool?.enrolled),
+      late: toNumber(highSchool?.late_enrollment),
+      dropped: toNumber(highSchool?.dropped_out),
+      withdrawn: toNumber(highSchool?.withdrawn),
+      colors: {
+        text: 'text-amber-600',
+        bg: 'bg-amber-500/10',
+        bar: 'bg-amber-500',
+      },
+    },
+    {
       key: 'shs',
-      title: 'Senior High School',
+      title: shs?.programName || 'Senior High School',
       icon: Users,
       watermark: 'SHS',
+      statusWatermark: 'SHS',
       total: toNumber(shs?.total),
       enrolled: toNumber(shs?.enrolled),
       late: toNumber(shs?.late_enrollment),
       dropped: toNumber(shs?.dropped_out),
       withdrawn: toNumber(shs?.withdrawn),
-      breakdown: breakdown?.shsByStrand || [],
       colors: {
         text: 'text-violet-600',
         bg: 'bg-violet-500/10',
@@ -50,15 +85,15 @@ export function EnrollmentStats({ summary, breakdown }) {
     },
     {
       key: 'college',
-      title: 'College',
+      title: college?.programName || 'College',
       icon: GraduationCap,
       watermark: 'COLLEGE',
+      statusWatermark: 'COL',
       total: toNumber(college?.total),
       enrolled: toNumber(college?.enrolled),
       late: toNumber(college?.late_enrollment),
       dropped: toNumber(college?.dropped_out),
       withdrawn: toNumber(college?.withdrawn),
-      breakdown: breakdown?.collegeByYearLevel || [],
       colors: {
         text: 'text-orange-600',
         bg: 'bg-orange-500/10',
@@ -67,15 +102,72 @@ export function EnrollmentStats({ summary, breakdown }) {
     },
   ];
 
+  const combinedLevels = [
+    {
+      key: 'gradeschool',
+      title: 'Grade School',
+      icon: BookOpen,
+      watermark: 'GRADE',
+      statusWatermark: 'GS',
+      total: toNumber(gradeSchool?.total),
+      enrolled: toNumber(gradeSchool?.enrolled),
+      late: toNumber(gradeSchool?.late_enrollment),
+      dropped: toNumber(gradeSchool?.dropped_out),
+      withdrawn: toNumber(gradeSchool?.withdrawn),
+      colors: {
+        text: 'text-emerald-600',
+        bg: 'bg-emerald-500/10',
+        bar: 'bg-emerald-500',
+      },
+    },
+    {
+      key: 'shs',
+      title: shs?.programName || 'Senior High School',
+      icon: Users,
+      watermark: 'SHS',
+      statusWatermark: 'SHS',
+      total: toNumber(shs?.total),
+      enrolled: toNumber(shs?.enrolled),
+      late: toNumber(shs?.late_enrollment),
+      dropped: toNumber(shs?.dropped_out),
+      withdrawn: toNumber(shs?.withdrawn),
+      colors: {
+        text: 'text-violet-600',
+        bg: 'bg-violet-500/10',
+        bar: 'bg-violet-500',
+      },
+    },
+    {
+      key: 'college',
+      title: college?.programName || 'College',
+      icon: GraduationCap,
+      watermark: 'COLLEGE',
+      statusWatermark: 'COL',
+      total: toNumber(college?.total),
+      enrolled: toNumber(college?.enrolled),
+      late: toNumber(college?.late_enrollment),
+      dropped: toNumber(college?.dropped_out),
+      withdrawn: toNumber(college?.withdrawn),
+      colors: {
+        text: 'text-orange-600',
+        bg: 'bg-orange-500/10',
+        bar: 'bg-orange-500',
+      },
+    },
+  ];
+
+  const levelStats = hasSplitPrograms ? splitLevels : combinedLevels;
+
   const totalEnrolled = levelStats.reduce((sum, level) => sum + level.enrolled, 0);
   const totalStudents = levelStats.reduce((sum, level) => sum + level.total, 0);
   const enrollmentRate = totalStudents > 0 ? (totalEnrolled / totalStudents) * 100 : 0;
   const otherStatuses = Math.max(totalStudents - totalEnrolled, 0);
+  const gradeLevelAnalysis = breakdown?.gradeLevelAnalysis || [];
 
   const statusSections = levelStats.map((level) => ({
     key: level.key,
     title: `${level.title} Status`,
-    watermark: level.key === 'gradeschool' ? 'GS' : level.key === 'shs' ? 'SHS' : 'COL',
+    watermark: level.statusWatermark || level.watermark,
     total: level.total,
     items: [
       { label: 'Enrolled', value: level.enrolled, variant: 'success' },
@@ -204,31 +296,49 @@ export function EnrollmentStats({ summary, breakdown }) {
                     </div>
                   ))}
                 </div>
-                {level.breakdown.length > 0 ? (
-                  <div className="space-y-1">
-                    {level.breakdown.slice(0, 3).map((item, idx) => (
-                      <div key={idx} className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground truncate max-w-[180px]">
-                          {item.level_name || item.strand_name || item.course_name}
-                          {item.yearLevel && ` (Year ${item.yearLevel})`}
-                        </span>
-                        <span className="font-medium">{formatNumber(item.count)}</span>
-                      </div>
-                    ))}
-                    {level.breakdown.length > 3 && (
-                      <p className="text-xs text-muted-foreground italic">
-                        +{level.breakdown.length - 3} more
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">No breakdown data yet</p>
-                )}
               </CardContent>
             </Card>
           );
         })}
       </div>
+
+      <Card data-watermark="GRADE">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium">Grade Level Analysis</CardTitle>
+          <p className="text-xs text-muted-foreground">Enrollment counts per grade level</p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {gradeLevelAnalysis.length > 0 ? (
+            <>
+              {gradeLevelAnalysis.slice(0, 12).map((level) => {
+                const percentage =
+                  totalStudents > 0 ? (toNumber(level.count) / totalStudents) * 100 : 0;
+                return (
+                  <div
+                    key={`${level.level_id ?? 'lvl'}-${level.level_name}`}
+                    className="space-y-1"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">{level.level_name}</span>
+                      <span className="font-medium">
+                        {formatNumber(level.count)} ({formatPercent(percentage)})
+                      </span>
+                    </div>
+                    <Progress value={percentage} className="h-2" />
+                  </div>
+                );
+              })}
+              {gradeLevelAnalysis.length > 12 && (
+                <p className="text-xs text-muted-foreground italic">
+                  +{gradeLevelAnalysis.length - 12} more levels
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">No grade level data yet</p>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {statusSections.map((section) => (

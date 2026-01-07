@@ -36,6 +36,45 @@ export const getEnrollmentSummary = async (req, res) => {
       'SELECT * FROM semester WHERE isactive = 1 LIMIT 1'
     );
 
+    const activeSyId = activeSchoolYear[0]?.id || 0;
+    const activeSemId = activeSemester[0]?.id || 0;
+
+    const [programRows] = await schoolDb.execute(
+      'SELECT id, progname FROM academicprogram WHERE id IN (2, 3, 4, 5, 6)'
+    );
+    const programMap = new Map(programRows.map((row) => [row.id, row.progname]));
+
+    const buildStatusCounts = (table) => `
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN studstatus = 1 THEN 1 ELSE 0 END) as enrolled,
+        SUM(CASE WHEN studstatus = 2 THEN 1 ELSE 0 END) as late_enrollment,
+        SUM(CASE WHEN studstatus = 3 THEN 1 ELSE 0 END) as dropped_out,
+        SUM(CASE WHEN studstatus = 6 THEN 1 ELSE 0 END) as withdrawn
+      FROM ${table}
+    `;
+
+    const [kindergartenCount] = await schoolDb.execute(
+      `${buildStatusCounts('enrolledstud')} e
+       LEFT JOIN gradelevel l ON e.levelid = l.id
+       WHERE e.deleted = 0 AND e.syid = ? AND l.acadprogid = 2`,
+      [activeSyId]
+    );
+
+    const [elementaryCount] = await schoolDb.execute(
+      `${buildStatusCounts('enrolledstud')} e
+       LEFT JOIN gradelevel l ON e.levelid = l.id
+       WHERE e.deleted = 0 AND e.syid = ? AND l.acadprogid = 3`,
+      [activeSyId]
+    );
+
+    const [highSchoolCount] = await schoolDb.execute(
+      `${buildStatusCounts('enrolledstud')} e
+       LEFT JOIN gradelevel l ON e.levelid = l.id
+       WHERE e.deleted = 0 AND e.syid = ? AND l.acadprogid = 4`,
+      [activeSyId]
+    );
+
     // Get enrollment counts by level
     const [gradeSchoolCount] = await schoolDb.execute(
       `SELECT
@@ -46,31 +85,20 @@ export const getEnrollmentSummary = async (req, res) => {
         SUM(CASE WHEN studstatus = 6 THEN 1 ELSE 0 END) as withdrawn
       FROM enrolledstud
       WHERE deleted = 0 AND syid = ?`,
-      [activeSchoolYear[0]?.id || 0]
+      [activeSyId]
     );
 
     const [shsCount] = await schoolDb.execute(
-      `SELECT
-        COUNT(*) as total,
-        SUM(CASE WHEN studstatus = 1 THEN 1 ELSE 0 END) as enrolled,
-        SUM(CASE WHEN studstatus = 2 THEN 1 ELSE 0 END) as late_enrollment,
-        SUM(CASE WHEN studstatus = 3 THEN 1 ELSE 0 END) as dropped_out,
-        SUM(CASE WHEN studstatus = 6 THEN 1 ELSE 0 END) as withdrawn
-      FROM sh_enrolledstud
-      WHERE deleted = 0 AND syid = ? AND semid = ?`,
-      [activeSchoolYear[0]?.id || 0, activeSemester[0]?.id || 0]
+      `${buildStatusCounts('sh_enrolledstud')} e
+       LEFT JOIN gradelevel l ON e.levelid = l.id
+       WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ? AND l.acadprogid = 5`,
+      [activeSyId, activeSemId]
     );
 
     const [collegeCount] = await schoolDb.execute(
-      `SELECT
-        COUNT(*) as total,
-        SUM(CASE WHEN studstatus = 1 THEN 1 ELSE 0 END) as enrolled,
-        SUM(CASE WHEN studstatus = 2 THEN 1 ELSE 0 END) as late_enrollment,
-        SUM(CASE WHEN studstatus = 3 THEN 1 ELSE 0 END) as dropped_out,
-        SUM(CASE WHEN studstatus = 6 THEN 1 ELSE 0 END) as withdrawn
-      FROM college_enrolledstud
-      WHERE deleted = 0 AND syid = ? AND semid = ?`,
-      [activeSchoolYear[0]?.id || 0, activeSemester[0]?.id || 0]
+      `${buildStatusCounts('college_enrolledstud')} e
+       WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ?`,
+      [activeSyId, activeSemId]
     );
 
     // Get enrollment by grade level (for grade school)
@@ -84,7 +112,7 @@ export const getEnrollmentSummary = async (req, res) => {
       WHERE e.deleted = 0 AND e.syid = ?
       GROUP BY e.levelid, l.levelname, l.id
       ORDER BY l.sortid`,
-      [activeSchoolYear[0]?.id || 0]
+      [activeSyId]
     );
 
     // Get enrollment by strand (for SHS)
@@ -98,7 +126,7 @@ export const getEnrollmentSummary = async (req, res) => {
       WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ?
       GROUP BY e.strandid, s.strandname, s.id
       ORDER BY s.strandname`,
-      [activeSchoolYear[0]?.id || 0, activeSemester[0]?.id || 0]
+      [activeSyId, activeSemId]
     );
 
     // Get enrollment by course (for college)
@@ -112,7 +140,52 @@ export const getEnrollmentSummary = async (req, res) => {
       WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ?
       GROUP BY e.courseid, c.coursedesc, e.yearLevel
       ORDER BY c.coursedesc, e.yearLevel`,
-      [activeSchoolYear[0]?.id || 0, activeSemester[0]?.id || 0]
+      [activeSyId, activeSemId]
+    );
+
+    const [gradeLevelAnalysis] = await schoolDb.execute(
+      `SELECT
+        level_name,
+        level_id,
+        SUM(level_count) as count,
+        sort_order
+      FROM (
+        SELECT
+          COALESCE(l.levelname, CONCAT('Level ', e.levelid)) as level_name,
+          e.levelid as level_id,
+          COUNT(e.id) as level_count,
+          COALESCE(l.sortid, 0) as sort_order
+        FROM enrolledstud e
+        LEFT JOIN gradelevel l ON e.levelid = l.id
+        WHERE e.deleted = 0 AND e.syid = ?
+        GROUP BY e.levelid, l.levelname, l.sortid
+
+        UNION ALL
+
+        SELECT
+          COALESCE(l.levelname, CONCAT('Level ', e.levelid)) as level_name,
+          e.levelid as level_id,
+          COUNT(e.id) as level_count,
+          COALESCE(l.sortid, 0) as sort_order
+        FROM sh_enrolledstud e
+        LEFT JOIN gradelevel l ON e.levelid = l.id
+        WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ?
+        GROUP BY e.levelid, l.levelname, l.sortid
+
+        UNION ALL
+
+        SELECT
+          CONCAT('Year ', e.yearLevel, ' College') as level_name,
+          e.yearLevel as level_id,
+          COUNT(e.id) as level_count,
+          100 + COALESCE(e.yearLevel, 0) as sort_order
+        FROM college_enrolledstud e
+        WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ? AND e.yearLevel IS NOT NULL
+        GROUP BY e.yearLevel
+      ) as levels
+      GROUP BY level_name, level_id, sort_order
+      ORDER BY sort_order, level_name`,
+      [activeSyId, activeSyId, activeSemId, activeSyId, activeSemId]
     );
 
     await schoolDb.end();
@@ -123,14 +196,33 @@ export const getEnrollmentSummary = async (req, res) => {
         activeSchoolYear: activeSchoolYear[0] || null,
         activeSemester: activeSemester[0] || null,
         summary: {
+          kindergarten: {
+            ...kindergartenCount[0],
+            programName: programMap.get(2) || 'Kindergarten',
+          },
+          elementary: {
+            ...elementaryCount[0],
+            programName: programMap.get(3) || 'Elementary',
+          },
+          highSchool: {
+            ...highSchoolCount[0],
+            programName: programMap.get(4) || 'High School',
+          },
           gradeSchool: gradeSchoolCount[0],
-          shs: shsCount[0],
-          college: collegeCount[0],
+          shs: {
+            ...shsCount[0],
+            programName: programMap.get(5) || 'Senior High School',
+          },
+          college: {
+            ...collegeCount[0],
+            programName: programMap.get(6) || 'College',
+          },
         },
         breakdown: {
           gradeSchoolByLevel,
           shsByStrand,
           collegeByYearLevel,
+          gradeLevelAnalysis,
         },
       },
     });
