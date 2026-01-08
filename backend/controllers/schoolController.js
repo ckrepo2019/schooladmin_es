@@ -5,7 +5,7 @@ import db from '../config/db.js'
 export const getAllSchools = async (req, res) => {
   try {
     const [schools] = await db.query(
-      'SELECT id, school_name, abbrv, image_logo, address, db_name, db_username, created_at, updated_at FROM schools ORDER BY created_at DESC'
+      'SELECT id, school_name, abbrv, image_logo, address, finance_v1, db_host, db_port, db_name, db_username, created_at, updated_at FROM schools ORDER BY created_at DESC'
     )
 
     res.status(200).json({
@@ -27,7 +27,7 @@ export const getSchoolById = async (req, res) => {
     const { id } = req.params
 
     const [schools] = await db.query(
-      'SELECT id, school_name, abbrv, image_logo, address, db_name, db_username, created_at, updated_at FROM schools WHERE id = ?',
+      'SELECT id, school_name, abbrv, image_logo, address, finance_v1, db_host, db_port, db_name, db_username, created_at, updated_at FROM schools WHERE id = ?',
       [id]
     )
 
@@ -54,7 +54,18 @@ export const getSchoolById = async (req, res) => {
 // Create new school
 export const createSchool = async (req, res) => {
   try {
-    const { school_name, abbrv, image_logo, address, db_name, db_username, db_password } = req.body
+    const {
+      school_name,
+      abbrv,
+      image_logo,
+      address,
+      db_name,
+      db_username,
+      db_password,
+      db_host,
+      db_port,
+      finance_v1,
+    } = req.body
 
     // Validate required fields (password is optional)
     if (!school_name || !db_name || !db_username) {
@@ -77,10 +88,29 @@ export const createSchool = async (req, res) => {
       })
     }
 
+    const resolvedHost = (db_host || process.env.DB_HOST || 'localhost').trim()
+    const parsedPort = Number.parseInt(db_port, 10)
+    const resolvedPort = Number.isNaN(parsedPort)
+      ? Number.parseInt(process.env.DB_PORT, 10) || 3306
+      : parsedPort
+    const resolvedFinanceV1 =
+      finance_v1 === true || finance_v1 === 1 || finance_v1 === '1' ? 1 : 0
+
     // Insert new school (password, abbrv, image_logo, address can be empty)
     const [result] = await db.query(
-      'INSERT INTO schools (school_name, abbrv, image_logo, address, db_name, db_username, db_password, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())',
-      [school_name, abbrv || '', image_logo || '', address || '', db_name, db_username, db_password || '']
+      'INSERT INTO schools (school_name, abbrv, image_logo, address, finance_v1, db_host, db_port, db_name, db_username, db_password, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())',
+      [
+        school_name,
+        abbrv || '',
+        image_logo || '',
+        address || '',
+        resolvedFinanceV1,
+        resolvedHost,
+        resolvedPort,
+        db_name,
+        db_username,
+        db_password || '',
+      ]
     )
 
     res.status(201).json({
@@ -92,6 +122,9 @@ export const createSchool = async (req, res) => {
         abbrv,
         image_logo,
         address,
+        finance_v1: resolvedFinanceV1,
+        db_host: resolvedHost,
+        db_port: resolvedPort,
         db_name,
         db_username,
       },
@@ -109,7 +142,18 @@ export const createSchool = async (req, res) => {
 export const updateSchool = async (req, res) => {
   try {
     const { id } = req.params
-    const { school_name, abbrv, image_logo, address, db_name, db_username, db_password } = req.body
+    const {
+      school_name,
+      abbrv,
+      image_logo,
+      address,
+      db_name,
+      db_username,
+      db_password,
+      db_host,
+      db_port,
+      finance_v1,
+    } = req.body
 
     // Check if school exists
     const [existingSchool] = await db.query(
@@ -168,6 +212,25 @@ export const updateSchool = async (req, res) => {
     if (db_password) {
       updateFields.push('db_password = ?')
       updateValues.push(db_password)
+    }
+    if (finance_v1 !== undefined) {
+      const resolvedFinanceV1 =
+        finance_v1 === true || finance_v1 === 1 || finance_v1 === '1' ? 1 : 0
+      updateFields.push('finance_v1 = ?')
+      updateValues.push(resolvedFinanceV1)
+    }
+    if (db_host !== undefined) {
+      const resolvedHost = (db_host || process.env.DB_HOST || 'localhost').trim()
+      updateFields.push('db_host = ?')
+      updateValues.push(resolvedHost)
+    }
+    if (db_port !== undefined) {
+      const parsedPort = Number.parseInt(db_port, 10)
+      const resolvedPort = Number.isNaN(parsedPort)
+        ? Number.parseInt(process.env.DB_PORT, 10) || 3306
+        : parsedPort
+      updateFields.push('db_port = ?')
+      updateValues.push(resolvedPort)
     }
 
     updateFields.push('updated_at = NOW()')
@@ -229,7 +292,7 @@ export const testConnection = async (req, res) => {
   let connection = null
 
   try {
-    const { db_name, db_username, db_password } = req.body
+    const { db_name, db_username, db_password, db_host, db_port } = req.body
 
     // Validate required fields (password is optional)
     if (!db_name || !db_username) {
@@ -239,12 +302,19 @@ export const testConnection = async (req, res) => {
       })
     }
 
+    const resolvedHost = (db_host || process.env.DB_HOST || 'localhost').trim()
+    const parsedPort = Number.parseInt(db_port, 10)
+    const resolvedPort = Number.isNaN(parsedPort)
+      ? Number.parseInt(process.env.DB_PORT, 10) || 3306
+      : parsedPort
+
     // Create connection configuration (password can be empty)
     const connectionConfig = {
-      host: process.env.DB_HOST || 'localhost',
+      host: resolvedHost,
       user: db_username,
       password: db_password || '',
       database: db_name,
+      port: resolvedPort,
     }
 
     // Attempt to create connection

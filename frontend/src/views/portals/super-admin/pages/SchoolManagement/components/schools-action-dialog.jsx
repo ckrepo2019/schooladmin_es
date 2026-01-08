@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useSchools } from './schools-provider'
 
 const schoolFormSchema = z.object({
@@ -31,6 +32,9 @@ const schoolFormSchema = z.object({
   abbrv: z.string().optional(),
   image_logo: z.string().optional(),
   address: z.string().optional(),
+  finance_v1: z.boolean().default(false),
+  db_host: z.string().min(1, 'Database host is required'),
+  db_port: z.coerce.number().int().min(1, 'Database port must be a valid number'),
   db_name: z.string().min(2, 'Database name must be at least 2 characters'),
   db_username: z.string().min(2, 'Database username must be at least 2 characters'),
   db_password: z.string().optional(),
@@ -53,6 +57,9 @@ export function SchoolsActionDialog({ open, onSuccess }) {
       abbrv: '',
       image_logo: '',
       address: '',
+      finance_v1: false,
+      db_host: 'localhost',
+      db_port: 3306,
       db_name: '',
       db_username: '',
       db_password: '',
@@ -66,6 +73,9 @@ export function SchoolsActionDialog({ open, onSuccess }) {
         abbrv: currentRow.abbrv || '',
         image_logo: currentRow.image_logo || '',
         address: currentRow.address || '',
+        finance_v1: Boolean(Number(currentRow.finance_v1)),
+        db_host: currentRow.db_host || 'localhost',
+        db_port: currentRow.db_port || 3306,
         db_name: currentRow.db_name,
         db_username: currentRow.db_username,
         db_password: '',
@@ -77,6 +87,9 @@ export function SchoolsActionDialog({ open, onSuccess }) {
         abbrv: '',
         image_logo: '',
         address: '',
+        finance_v1: false,
+        db_host: 'localhost',
+        db_port: 3306,
         db_name: '',
         db_username: '',
         db_password: '',
@@ -152,6 +165,8 @@ export function SchoolsActionDialog({ open, onSuccess }) {
         },
         credentials: 'include',
         body: JSON.stringify({
+          db_host: values.db_host,
+          db_port: values.db_port,
           db_name: values.db_name,
           db_username: values.db_username,
           db_password: values.db_password,
@@ -188,6 +203,7 @@ export function SchoolsActionDialog({ open, onSuccess }) {
       // Include the logo path in the data
       const schoolData = {
         ...data,
+        finance_v1: data.finance_v1 ? 1 : 0,
         image_logo: logoPath,
       }
 
@@ -323,6 +339,50 @@ export function SchoolsActionDialog({ open, onSuccess }) {
                       rows={2}
                       {...field}
                     />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='finance_v1'
+              render={({ field }) => (
+                <FormItem className='flex items-center justify-between rounded-md border border-input px-3 py-2'>
+                  <FormLabel className='font-normal'>Finance V1</FormLabel>
+                  <FormControl>
+                    <Checkbox
+                      checked={field.value}
+                      onCheckedChange={(checked) => field.onChange(!!checked)}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='db_host'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Database Host</FormLabel>
+                  <FormControl>
+                    <Input placeholder='localhost' {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='db_port'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Database Port</FormLabel>
+                  <FormControl>
+                    <Input type='number' min={1} placeholder='3306' {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

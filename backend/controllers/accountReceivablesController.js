@@ -1,11 +1,16 @@
 import mysql from 'mysql2/promise';
 
 const getSchoolConnection = async (schoolDbConfig) => {
+  const parsedPort = Number.parseInt(schoolDbConfig.db_port, 10);
+  const resolvedPort = Number.isNaN(parsedPort)
+    ? Number.parseInt(process.env.DB_PORT, 10) || 3306
+    : parsedPort;
   const connection = await mysql.createConnection({
-    host: process.env.DB_HOST || 'localhost',
+    host: schoolDbConfig.db_host || process.env.DB_HOST || 'localhost',
     user: schoolDbConfig.db_username,
     password: schoolDbConfig.db_password || '',
     database: schoolDbConfig.db_name,
+    port: resolvedPort,
   });
   return connection;
 };
