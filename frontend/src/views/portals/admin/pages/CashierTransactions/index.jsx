@@ -56,6 +56,10 @@ export default function CashierTransactions() {
     db_password: selectedSchool.db_password || '',
   } : null;
 
+  // Check if school uses finance_v1 to determine API routing
+  const isFinanceV1 = selectedSchool?.finance_v1 == 1;
+  const API_BASE = isFinanceV1 ? '/api/admin/finance-v1' : '/api/admin';
+
   // Calculate date range based on preset
   useEffect(() => {
     if (selectedDateRange === 'custom') return;
@@ -175,7 +179,7 @@ export default function CashierTransactions() {
 
   const fetchPaymentTypes = async () => {
     try {
-      const response = await fetch(apiUrl('/api/admin/cashier/payment-types'), {
+      const response = await fetch(apiUrl(`${API_BASE}/cashier/payment-types`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -196,7 +200,7 @@ export default function CashierTransactions() {
 
   const fetchTerminals = async () => {
     try {
-      const response = await fetch(apiUrl('/api/admin/cashier/terminals'), {
+      const response = await fetch(apiUrl(`${API_BASE}/cashier/terminals`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -223,7 +227,7 @@ export default function CashierTransactions() {
     summaryAbortRef.current = controller;
     try {
       setSummaryLoading(true);
-      const response = await fetch(apiUrl('/api/admin/cashier/summary'), {
+      const response = await fetch(apiUrl(`${API_BASE}/cashier/summary`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -269,7 +273,7 @@ export default function CashierTransactions() {
     listAbortRef.current = controller;
     try {
       setListLoading(true);
-      const response = await fetch(apiUrl('/api/admin/cashier/transactions'), {
+      const response = await fetch(apiUrl(`${API_BASE}/cashier/transactions`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

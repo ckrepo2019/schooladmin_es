@@ -43,6 +43,10 @@ export default function AccountReceivables() {
       }
     : null;
 
+  // Check if school uses finance_v1 to determine API routing
+  const isFinanceV1 = selectedSchool?.finance_v1 == 1;
+  const API_BASE = isFinanceV1 ? '/api/admin/finance-v1' : '/api/admin';
+
   useEffect(() => {
     if (!selectedSchool) {
       toast.error('No school selected');
@@ -151,7 +155,7 @@ export default function AccountReceivables() {
 
   const fetchFilters = async () => {
     try {
-      const response = await fetch(apiUrl('/api/admin/receivables/filters'), {
+      const response = await fetch(apiUrl(`${API_BASE}/receivables/filters`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -180,7 +184,7 @@ export default function AccountReceivables() {
 
     try {
       setSummaryLoading(true);
-      const response = await fetch(apiUrl('/api/admin/receivables/summary'), {
+      const response = await fetch(apiUrl(`${API_BASE}/receivables/summary`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -224,7 +228,7 @@ export default function AccountReceivables() {
 
     try {
       setListLoading(true);
-      const response = await fetch(apiUrl('/api/admin/receivables/list'), {
+      const response = await fetch(apiUrl(`${API_BASE}/receivables/list`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -51,6 +51,10 @@ export default function DailyCashProgress() {
       }
     : null;
 
+  // Check if school uses finance_v1 to determine API routing
+  const isFinanceV1 = selectedSchool?.finance_v1 == 1;
+  const API_BASE = isFinanceV1 ? '/api/admin/finance-v1' : '/api/admin';
+
   useEffect(() => {
     if (!selectedSchool) {
       toast.error('No school selected');
@@ -133,7 +137,7 @@ export default function DailyCashProgress() {
 
     try {
       setSummaryLoading(true);
-      const response = await fetch(apiUrl('/api/admin/cash-progress/summary'), {
+      const response = await fetch(apiUrl(`${API_BASE}/cash-progress/summary`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -175,7 +179,7 @@ export default function DailyCashProgress() {
 
     try {
       setListLoading(true);
-      const response = await fetch(apiUrl('/api/admin/cash-progress/items'), {
+      const response = await fetch(apiUrl(`${API_BASE}/cash-progress/items`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

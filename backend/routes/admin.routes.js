@@ -39,6 +39,21 @@ import {
   getYearlySummary,
   getYearlySummaryTable,
 } from '../controllers/summaryController.js';
+import {
+  getAccountReceivableFilters as getFinanceV1ReceivableFilters,
+  getAccountReceivableSummary as getFinanceV1ReceivableSummary,
+  getAccountReceivableList as getFinanceV1ReceivableList,
+  getCashierSummary as getFinanceV1CashierSummary,
+  getTransactionList as getFinanceV1TransactionList,
+  getPaymentTypes as getFinanceV1PaymentTypes,
+  getTerminals as getFinanceV1Terminals,
+  getDailyCashSummary as getFinanceV1DailyCashSummary,
+  getDailyCashItems as getFinanceV1DailyCashItems,
+  getMonthlySummary as getFinanceV1MonthlySummary,
+  getMonthlySummaryItems as getFinanceV1MonthlySummaryItems,
+  getYearlySummary as getFinanceV1YearlySummary,
+  getYearlySummaryTable as getFinanceV1YearlySummaryTable,
+} from '../controllers/financeV1Controller.js';
 import { verifyToken } from '../middleware/auth.js';
 import { uploadMemoFile } from '../middleware/upload.js';
 
@@ -176,5 +191,53 @@ router.post('/yearly-summary/summary', verifyToken, getYearlySummary);
 
 // POST /api/admin/yearly-summary/table - Get yearly summary table data
 router.post('/yearly-summary/table', verifyToken, getYearlySummaryTable);
+
+// ============================================================================
+// FINANCE V1 ROUTES (for schools with finance_v1 = 1)
+// ============================================================================
+
+// Finance V1 - Accounts Receivable Routes (all require authentication)
+// POST /api/admin/finance-v1/receivables/filters - Get account receivables filters
+router.post('/finance-v1/receivables/filters', verifyToken, getFinanceV1ReceivableFilters);
+
+// POST /api/admin/finance-v1/receivables/summary - Get account receivables summary
+router.post('/finance-v1/receivables/summary', verifyToken, getFinanceV1ReceivableSummary);
+
+// POST /api/admin/finance-v1/receivables/list - Get account receivables list
+router.post('/finance-v1/receivables/list', verifyToken, getFinanceV1ReceivableList);
+
+// Finance V1 - Cashier Transaction Routes (all require authentication)
+// POST /api/admin/finance-v1/cashier/summary - Get cashier summary statistics
+router.post('/finance-v1/cashier/summary', verifyToken, getFinanceV1CashierSummary);
+
+// POST /api/admin/finance-v1/cashier/transactions - Get transaction list
+router.post('/finance-v1/cashier/transactions', verifyToken, getFinanceV1TransactionList);
+
+// POST /api/admin/finance-v1/cashier/payment-types - Get payment types
+router.post('/finance-v1/cashier/payment-types', verifyToken, getFinanceV1PaymentTypes);
+
+// POST /api/admin/finance-v1/cashier/terminals - Get terminals
+router.post('/finance-v1/cashier/terminals', verifyToken, getFinanceV1Terminals);
+
+// Finance V1 - Daily Cash Progress Routes (all require authentication)
+// POST /api/admin/finance-v1/cash-progress/summary - Get daily cash summary
+router.post('/finance-v1/cash-progress/summary', verifyToken, getFinanceV1DailyCashSummary);
+
+// POST /api/admin/finance-v1/cash-progress/items - Get daily cash items
+router.post('/finance-v1/cash-progress/items', verifyToken, getFinanceV1DailyCashItems);
+
+// Finance V1 - Monthly Summary Routes (all require authentication)
+// POST /api/admin/finance-v1/monthly-summary/summary - Get monthly summary analytics
+router.post('/finance-v1/monthly-summary/summary', verifyToken, getFinanceV1MonthlySummary);
+
+// POST /api/admin/finance-v1/monthly-summary/items - Get monthly summary items
+router.post('/finance-v1/monthly-summary/items', verifyToken, getFinanceV1MonthlySummaryItems);
+
+// Finance V1 - Yearly Summary Routes (all require authentication)
+// POST /api/admin/finance-v1/yearly-summary/summary - Get yearly summary analytics
+router.post('/finance-v1/yearly-summary/summary', verifyToken, getFinanceV1YearlySummary);
+
+// POST /api/admin/finance-v1/yearly-summary/table - Get yearly summary table data
+router.post('/finance-v1/yearly-summary/table', verifyToken, getFinanceV1YearlySummaryTable);
 
 export default router;

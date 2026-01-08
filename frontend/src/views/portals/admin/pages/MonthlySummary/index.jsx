@@ -60,6 +60,10 @@ export default function MonthlySummary() {
       }
     : null;
 
+  // Check if school uses finance_v1 to determine API routing
+  const isFinanceV1 = selectedSchool?.finance_v1 == 1;
+  const API_BASE = isFinanceV1 ? '/api/admin/finance-v1' : '/api/admin';
+
   useEffect(() => {
     if (!selectedSchool) {
       toast.error('No school selected');
@@ -141,7 +145,7 @@ export default function MonthlySummary() {
 
     try {
       setSummaryLoading(true);
-      const response = await fetch(apiUrl('/api/admin/monthly-summary/summary'), {
+      const response = await fetch(apiUrl(`${API_BASE}/monthly-summary/summary`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -185,7 +189,7 @@ export default function MonthlySummary() {
 
     try {
       setListLoading(true);
-      const response = await fetch(apiUrl('/api/admin/monthly-summary/items'), {
+      const response = await fetch(apiUrl(`${API_BASE}/monthly-summary/items`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
