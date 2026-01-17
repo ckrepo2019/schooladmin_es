@@ -17,6 +17,93 @@ const getSchoolConnection = async (schoolDbConfig) => {
 
 const toNumber = (value) => Number(value) || 0;
 
+// ============================================================================
+// FINANCE V1 STUDLEDGER-BASED CALCULATION
+// Based on StatementofAccountController.php logic
+// ============================================================================
+
+/**
+ * Calculate student totals directly from studledger table (finance_v1 approach)
+ * This mirrors the PHP StatementofAccountController.php logic where:
+ * - balance = SUM(amount) - SUM(payment) from studledger where void=0 and deleted=0
+ */
+const calculateStudentTotalsFromLedger = async (db, student, syid, semid, schoolInfo) => {
+  if (!syid) {
+    return {
+      total_fees: 0,
+      total_paid: 0,
+      balance: 0,
+      overpayment: 0,
+    };
+  }
+
+  try {
+    const params = [student.id, syid];
+    let query = `
+      SELECT
+        SUM(CASE WHEN void = 0 THEN amount ELSE 0 END) as total_amount,
+        SUM(CASE WHEN void = 0 THEN payment ELSE 0 END) as total_payment
+      FROM studledger
+      WHERE studid = ? AND syid = ? AND deleted = 0
+    `;
+
+    // Apply semester filter based on level (same logic as PHP)
+    if (student.levelid === 14 || student.levelid === 15) {
+      // SHS: check shssetup flag
+      if (schoolInfo && schoolInfo.shssetup === 0 && semid) {
+        query += ' AND semid = ?';
+        params.push(semid);
+      }
+    } else if (student.levelid >= 17 && student.levelid <= 25) {
+      // College: always filter by semester
+      if (semid) {
+        query += ' AND semid = ?';
+        params.push(semid);
+      }
+    }
+    // For basic education (levelid 1-13), no semester filter needed
+
+    const [rows] = await db.execute(query, params);
+    const totalAmount = toNumber(rows[0]?.total_amount);
+    const totalPayment = toNumber(rows[0]?.total_payment);
+
+    const balance = Math.max(totalAmount - totalPayment, 0);
+    const overpayment = Math.max(totalPayment - totalAmount, 0);
+
+    return {
+      total_fees: Number(totalAmount.toFixed(2)),
+      total_paid: Number(totalPayment.toFixed(2)),
+      balance: Number(balance.toFixed(2)),
+      overpayment: Number(overpayment.toFixed(2)),
+    };
+  } catch (error) {
+    // Return zeros if query fails
+    return {
+      total_fees: 0,
+      total_paid: 0,
+      balance: 0,
+      overpayment: 0,
+    };
+  }
+};
+
+/**
+ * Check if studledger has entries for this student/sy combination
+ * Used to determine if we should use ledger-based calculation
+ */
+const hasStudledgerEntries = async (db, studid, syid) => {
+  try {
+    const [rows] = await db.execute(
+      'SELECT COUNT(*) as count FROM studledger WHERE studid = ? AND syid = ? AND deleted = 0 LIMIT 1',
+      [studid, syid]
+    );
+    return toNumber(rows[0]?.count) > 0;
+  } catch (error) {
+    // Table might not exist, return false to use fallback calculation
+    return false;
+  }
+};
+
 const getSchoolInfo = async (db) => {
   const [rows] = await db.execute('SELECT shssetup FROM schoolinfo LIMIT 1');
   return rows[0] || null;
@@ -57,7 +144,6 @@ const getEnrolledStudentIds = async (db, syid, semid, programId) => {
   const includeBasic = !programId || [2, 3, 4].includes(programId);
   const includeShs = !programId || programId === 5;
   const includeCollege = !programId || programId === 6;
-  const includeTesda = !programId || programId === 7;
 
   const addIds = async (table, useSem) => {
     const params = [];
@@ -84,9 +170,6 @@ const getEnrolledStudentIds = async (db, syid, semid, programId) => {
   if (includeCollege) {
     await addIds('college_enrolledstud', true);
   }
-  if (includeTesda) {
-    await addIds('tesda_enrolledstud', false);
-  }
 
   return Array.from(ids);
 };
@@ -94,7 +177,6 @@ const getEnrolledStudentIds = async (db, syid, semid, programId) => {
 const getEnrollmentTable = (levelid) => {
   if (levelid === 14 || levelid === 15) return 'sh_enrolledstud';
   if (levelid >= 17 && levelid <= 25) return 'college_enrolledstud';
-  if (levelid === 26) return 'tesda_enrolledstud';
   return 'enrolledstud';
 };
 
@@ -277,10 +359,11 @@ const fetchBookEntries = async (db, student, syid, semid) => {
   if (!syid) return 0;
 
   const params = [student.id, syid];
+  // Match StudentAccountV2Controller.php - only count APPROVED book entries
   let query = `
     SELECT SUM(amount) as amount
     FROM bookentries
-    WHERE studid = ? AND syid = ? AND deleted = 0
+    WHERE studid = ? AND syid = ? AND deleted = 0 AND bestatus = 'APPROVED'
   `;
 
   if (useSemesterForLevel(student.levelid) && semid) {
@@ -295,12 +378,13 @@ const fetchBookEntries = async (db, student, syid, semid) => {
 const fetchAdjustmentCharges = async (db, student, syid, semid) => {
   if (!syid) return 0;
 
-  const params = [student.id, syid];
+  // Match StudentAccountV2Controller.php - filter by levelid
+  const params = [student.id, syid, student.levelid];
   let query = `
     SELECT SUM(a.amount) as amount
     FROM adjustmentdetails ad
     JOIN adjustments a ON ad.headerid = a.id
-    WHERE ad.studid = ? AND a.syid = ? AND ad.deleted = 0 AND a.deleted = 0
+    WHERE ad.studid = ? AND a.syid = ? AND a.levelid = ? AND ad.deleted = 0 AND a.deleted = 0
       AND a.isdebit = 1
   `;
 
@@ -314,22 +398,24 @@ const fetchAdjustmentCharges = async (db, student, syid, semid) => {
 };
 
 const fetchOldAccountCharges = async (db, student, syid, semid, balClassId) => {
-  if (!syid || !balClassId) return 0;
+  if (!syid) return 0;
 
-  const params = [student.id, syid, balClassId];
-  let query = `
-    SELECT SUM(amount) as amount
-    FROM studledger
-    WHERE studid = ? AND syid = ? AND classid = ? AND amount > 0 AND deleted = 0 AND void = 0
+  // Match StudentAccountV2Controller.php - use old_student_accounts table
+  // Sum balances from non-forwarded old accounts (isforwarded = 0)
+  const params = [student.id];
+  const query = `
+    SELECT SUM(balance) as amount
+    FROM old_student_accounts
+    WHERE stud_id = ? AND deleted = 0 AND isforwarded = 0
   `;
 
-  if (useSemesterForLevel(student.levelid) && semid) {
-    query += ' AND semid = ?';
-    params.push(semid);
+  try {
+    const [rows] = await db.execute(query, params);
+    return toNumber(rows[0]?.amount);
+  } catch (error) {
+    // Table might not exist in some databases, fall back to 0
+    return 0;
   }
-
-  const [rows] = await db.execute(query, params);
-  return toNumber(rows[0]?.amount);
 };
 
 const fetchStudentPayments = async (db, student, syid, semid, balClassId) => {
@@ -368,12 +454,13 @@ const fetchStudentPayments = async (db, student, syid, semid, balClassId) => {
     oldPayments = toNumber(oldRows[0]?.amount);
   }
 
-  const creditParams = [student.id, syid];
+  // Match StudentAccountV2Controller.php - credit adjustments also filter by levelid
+  const creditParams = [student.id, syid, student.levelid];
   let creditQuery = `
     SELECT SUM(a.amount) as amount
     FROM adjustmentdetails ad
     JOIN adjustments a ON ad.headerid = a.id
-    WHERE ad.studid = ? AND a.syid = ? AND ad.deleted = 0 AND a.deleted = 0
+    WHERE ad.studid = ? AND a.syid = ? AND a.levelid = ? AND ad.deleted = 0 AND a.deleted = 0
       AND a.iscredit = 1
   `;
 
@@ -388,7 +475,7 @@ const fetchStudentPayments = async (db, student, syid, semid, balClassId) => {
   return payments + oldPayments + creditAdjustments;
 };
 
-const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balClassId) => {
+const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balClassId, useStudledger = false) => {
   if (!syid) {
     return {
       total_fees: 0,
@@ -398,6 +485,16 @@ const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balC
     };
   }
 
+  // Finance V1 approach: Use studledger directly if flag is set or if student has ledger entries
+  // This mirrors StatementofAccountController.php logic
+  if (useStudledger) {
+    const hasLedger = await hasStudledgerEntries(db, student.id, syid);
+    if (hasLedger) {
+      return calculateStudentTotalsFromLedger(db, student, syid, semid, schoolInfo);
+    }
+  }
+
+  // Default approach: Calculate from tuition setup and transactions
   const tuitionRows = await fetchTuitionFees(db, student, syid, semid, schoolInfo);
   const totalsByClass = {};
 
@@ -608,7 +705,7 @@ const fetchStudents = async (db, { syid, semid, programId, levelId, search }) =>
 };
 
 const buildSyComparison = async (db, options) => {
-  const { programId, levelId, semid, schoolInfo, balClassId } = options;
+  const { programId, levelId, semid, schoolInfo, balClassId, useStudledger = false } = options;
   const schoolYears = await getSchoolYears(db, 4);
   const comparison = [];
 
@@ -631,7 +728,8 @@ const buildSyComparison = async (db, options) => {
         sy.id,
         semid,
         schoolInfo,
-        balClassId
+        balClassId,
+        useStudledger
       );
 
       if (Number(totals.total_fees) <= 0) {
@@ -700,6 +798,7 @@ export const getAccountReceivableList = async (req, res) => {
       search,
       page = 1,
       perPage = 200,
+      useStudledger = false, // Finance V1 flag to use studledger-based calculation
     } = req.body;
 
     if (!schoolDbConfig) {
@@ -736,7 +835,8 @@ export const getAccountReceivableList = async (req, res) => {
         syid,
         semid,
         schoolInfo,
-        balClassId
+        balClassId,
+        useStudledger
       );
 
       if (Number(totals.total_fees) <= 0) {
@@ -774,7 +874,15 @@ export const getAccountReceivableList = async (req, res) => {
 
 export const getAccountReceivableSummary = async (req, res) => {
   try {
-    const { schoolDbConfig, syid, semid, programId, levelId, search } = req.body;
+    const {
+      schoolDbConfig,
+      syid,
+      semid,
+      programId,
+      levelId,
+      search,
+      useStudledger = false, // Finance V1 flag to use studledger-based calculation
+    } = req.body;
 
     if (!schoolDbConfig) {
       return res.status(400).json({
@@ -801,6 +909,7 @@ export const getAccountReceivableSummary = async (req, res) => {
       semid,
       schoolInfo,
       balClassId,
+      useStudledger,
     });
 
     if (!students.length) {
@@ -832,7 +941,8 @@ export const getAccountReceivableSummary = async (req, res) => {
         syid,
         semid,
         schoolInfo,
-        balClassId
+        balClassId,
+        useStudledger
       );
       studentsWithTotals.push({
         ...student,

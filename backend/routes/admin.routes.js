@@ -56,8 +56,85 @@ import {
 } from '../controllers/financeV1Controller.js';
 import { verifyToken } from '../middleware/auth.js';
 import { uploadMemoFile } from '../middleware/upload.js';
+import db from '../config/db.js';
+import mysql from 'mysql2/promise';
 
 const router = express.Router();
+
+const getSchoolConnection = async (schoolDbConfig) => {
+  const parsedPort = Number.parseInt(schoolDbConfig.db_port, 10);
+  const resolvedPort = Number.isNaN(parsedPort)
+    ? Number.parseInt(process.env.DB_PORT, 10) || 3306
+    : parsedPort;
+  const connection = await mysql.createConnection({
+    host: schoolDbConfig.db_host || process.env.DB_HOST || 'localhost',
+    user: schoolDbConfig.db_username,
+    password: schoolDbConfig.db_password || '',
+    database: schoolDbConfig.db_name,
+    port: resolvedPort,
+  });
+  return connection;
+};
+
+const probeFinanceV1BySchema = async (schoolDbConfig) => {
+  let schoolDb;
+  try {
+    schoolDb = await getSchoolConnection(schoolDbConfig);
+    const [columnRows] = await schoolDb.execute(
+      `SELECT COUNT(*) as count
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = ?
+         AND TABLE_NAME = 'chrngtrans'
+         AND COLUMN_NAME = 'change_amount'`,
+      [schoolDbConfig.db_name]
+    );
+    return Number(columnRows?.[0]?.count || 0) === 0;
+  } catch (schemaError) {
+    console.error('Error probing school DB schema:', schemaError);
+    return false;
+  } finally {
+    if (schoolDb) {
+      await schoolDb.end();
+    }
+  }
+};
+
+const resolveFinanceV1 = async (schoolDbConfig) => {
+  if (!schoolDbConfig?.db_name) {
+    return false;
+  }
+
+  if (schoolDbConfig.finance_v1 !== undefined && schoolDbConfig.finance_v1 !== null) {
+    return Number(schoolDbConfig.finance_v1) === 1;
+  }
+
+  try {
+    const [rows] = await db.query(
+      'SELECT finance_v1 FROM schools WHERE db_name = ? LIMIT 1',
+      [schoolDbConfig.db_name]
+    );
+    if (!rows || rows.length === 0) {
+      return await probeFinanceV1BySchema(schoolDbConfig);
+    }
+    return Number(rows[0].finance_v1) === 1;
+  } catch (error) {
+    console.error('Error resolving finance_v1 flag:', error);
+    return await probeFinanceV1BySchema(schoolDbConfig);
+  }
+};
+
+const routeFinance = (v2Handler, v1Handler) => async (req, res, next) => {
+  if (!v1Handler) {
+    return v2Handler(req, res, next);
+  }
+
+  const isFinanceV1 = await resolveFinanceV1(req.body?.schoolDbConfig);
+  if (isFinanceV1) {
+    return v1Handler(req, res, next);
+  }
+
+  return v2Handler(req, res, next);
+};
 
 // Employee Profile Routes (all require authentication)
 // POST /api/admin/employees - Get all employees (POST to send school db config)
@@ -146,33 +223,69 @@ router.post('/enrollment/semesters', verifyToken, getSemesters);
 
 // Cashier Transaction Routes (all require authentication)
 // POST /api/admin/cashier/summary - Get cashier summary statistics
-router.post('/cashier/summary', verifyToken, getCashierSummary);
+router.post(
+  '/cashier/summary',
+  verifyToken,
+  routeFinance(getCashierSummary, getFinanceV1CashierSummary)
+);
 
 // POST /api/admin/cashier/transactions - Get transaction list
-router.post('/cashier/transactions', verifyToken, getTransactionList);
+router.post(
+  '/cashier/transactions',
+  verifyToken,
+  routeFinance(getTransactionList, getFinanceV1TransactionList)
+);
 
 // POST /api/admin/cashier/payment-types - Get payment types
-router.post('/cashier/payment-types', verifyToken, getPaymentTypes);
+router.post(
+  '/cashier/payment-types',
+  verifyToken,
+  routeFinance(getPaymentTypes, getFinanceV1PaymentTypes)
+);
 
 // POST /api/admin/cashier/terminals - Get terminals
-router.post('/cashier/terminals', verifyToken, getTerminals);
+router.post(
+  '/cashier/terminals',
+  verifyToken,
+  routeFinance(getTerminals, getFinanceV1Terminals)
+);
 
 // Accounts Receivable Routes (all require authentication)
 // POST /api/admin/receivables/filters - Get account receivables filters
-router.post('/receivables/filters', verifyToken, getAccountReceivableFilters);
+router.post(
+  '/receivables/filters',
+  verifyToken,
+  routeFinance(getAccountReceivableFilters, getFinanceV1ReceivableFilters)
+);
 
 // POST /api/admin/receivables/summary - Get account receivables summary
-router.post('/receivables/summary', verifyToken, getAccountReceivableSummary);
+router.post(
+  '/receivables/summary',
+  verifyToken,
+  routeFinance(getAccountReceivableSummary, getFinanceV1ReceivableSummary)
+);
 
 // POST /api/admin/receivables/list - Get account receivables list
-router.post('/receivables/list', verifyToken, getAccountReceivableList);
+router.post(
+  '/receivables/list',
+  verifyToken,
+  routeFinance(getAccountReceivableList, getFinanceV1ReceivableList)
+);
 
 // Daily Cash Progress Routes (all require authentication)
 // POST /api/admin/cash-progress/summary - Get daily cash summary
-router.post('/cash-progress/summary', verifyToken, getDailyCashSummary);
+router.post(
+  '/cash-progress/summary',
+  verifyToken,
+  routeFinance(getDailyCashSummary, getFinanceV1DailyCashSummary)
+);
 
 // POST /api/admin/cash-progress/items - Get daily cash items
-router.post('/cash-progress/items', verifyToken, getDailyCashItems);
+router.post(
+  '/cash-progress/items',
+  verifyToken,
+  routeFinance(getDailyCashItems, getFinanceV1DailyCashItems)
+);
 
 // Calendar Routes (all require authentication)
 // POST /api/admin/calendar/events - Get school calendar events
@@ -180,17 +293,33 @@ router.post('/calendar/events', verifyToken, getSchoolCalendarEvents);
 
 // Monthly Summary Routes (all require authentication)
 // POST /api/admin/monthly-summary/summary - Get monthly summary analytics
-router.post('/monthly-summary/summary', verifyToken, getMonthlySummary);
+router.post(
+  '/monthly-summary/summary',
+  verifyToken,
+  routeFinance(getMonthlySummary, getFinanceV1MonthlySummary)
+);
 
 // POST /api/admin/monthly-summary/items - Get monthly summary items
-router.post('/monthly-summary/items', verifyToken, getMonthlySummaryItems);
+router.post(
+  '/monthly-summary/items',
+  verifyToken,
+  routeFinance(getMonthlySummaryItems, getFinanceV1MonthlySummaryItems)
+);
 
 // Yearly Summary Routes (all require authentication)
 // POST /api/admin/yearly-summary/summary - Get yearly summary analytics
-router.post('/yearly-summary/summary', verifyToken, getYearlySummary);
+router.post(
+  '/yearly-summary/summary',
+  verifyToken,
+  routeFinance(getYearlySummary, getFinanceV1YearlySummary)
+);
 
 // POST /api/admin/yearly-summary/table - Get yearly summary table data
-router.post('/yearly-summary/table', verifyToken, getYearlySummaryTable);
+router.post(
+  '/yearly-summary/table',
+  verifyToken,
+  routeFinance(getYearlySummaryTable, getFinanceV1YearlySummaryTable)
+);
 
 // ============================================================================
 // FINANCE V1 ROUTES (for schools with finance_v1 = 1)

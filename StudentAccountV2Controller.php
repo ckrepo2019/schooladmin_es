@@ -79,9 +79,9 @@ class StudentAccountV2Controller extends Controller
 
         // Higher education programs (parent)
         $higherEducations = DB::table('higher_educations')
-            ->select('id', 'collegeDesc', 'collegeabrv', 'createdby')
+            ->select('id', 'degreeDesc', 'degreeabrv', 'createdby')
             ->where('deleted', 0)
-            ->orderBy('collegeDesc')
+            ->orderBy('degreeDesc')
             ->get();
 
         // Higher education degrees grouped by higher education id
@@ -1143,13 +1143,14 @@ class StudentAccountV2Controller extends Controller
         $section = $request->input('section');
         $scholarship = $request->input('scholarship');
         $status = $request->input('status');
+        $paymentFilter = $request->input('payment_filter');
 
         // Search parameter
         $search = $request->input('search', '');
 
         // Pagination parameters
         $page = max(1, (int) $request->input('page', 1));
-        $perPage = max(1, min(100, (int) $request->input('per_page', 15)));
+        $perPage = max(1, min(999999, (int) $request->input('per_page', 15)));
 
         // Active term for feesid fallback (gradeschool has no sem)
         $activeSY = DB::table('sy')->where('isactive', 1)->orderByDesc('sydesc')->first();
@@ -1255,6 +1256,8 @@ class StudentAccountV2Controller extends Controller
                         WHEN gl.acadprogid = 7 THEN tc.course_name
                         ELSE NULL
                     END as course_name"),
+                    'cc.courseabrv as course_abrv',
+                    'tc.course_code as course_code',
                     'shs.strandname',
                     'shs.strandcode',
                     DB::raw("CASE WHEN pte.id IS NOT NULL THEN 1 ELSE 0 END as permit")
@@ -1472,32 +1475,240 @@ class StudentAccountV2Controller extends Controller
             // Apply pagination
             $offset = ($page - 1) * $perPage;
 
-            // Order by:
-            // 1. Enrollment status (enrolled students ALWAYS first, regardless of level)
-            // 2. Has fees (students with feesid first within each group)
-            // 3. levelid (lowest level first within each group)
-            // 4. Name (lastname, firstname)
-            if ($enrolledStudentIds->isNotEmpty()) {
-                $enrolledIdsArray = $enrolledStudentIds->toArray();
-                $placeholders = implode(',', array_fill(0, count($enrolledIdsArray), '?'));
-                $students = $query->orderByRaw("CASE WHEN si.id IN ({$placeholders}) THEN 0 ELSE 1 END", $enrolledIdsArray)
-                    ->orderByRaw("CASE WHEN si.feesid IS NOT NULL AND si.feesid != '' AND si.feesid != 0 THEN 0 ELSE 1 END")
-                    ->orderBy('si.levelid', 'asc')
-                    ->orderBy('si.lastname')
-                    ->orderBy('si.firstname')
-                    ->offset($offset)
-                    ->limit($perPage)
-                    ->get();
+            // Flag to track if we're doing payment filtering
+            $isPaymentFiltering = !empty($paymentFilter);
+
+            // OPTIMIZED PAYMENT FILTERING: Filter by payment status BEFORE fetching full data
+            // For "overpaid" filter, we need to use actual financial data since quick calculation isn't accurate enough
+            if ($isPaymentFiltering && $schoolYear) {
+                if ($paymentFilter === 'overpaid') {
+                    // OVERPAID FILTER: Use actual financial data for accuracy
+                    // Phase 1: Pre-filter to students with payments (quick check)
+                    $studentsWithPayments = DB::table('chrngtrans')
+                        ->whereIn('studid', $studentIds)
+                        ->where('cancelled', 0)
+                        ->where('syid', $schoolYear)
+                        ->when($semester && in_array($academicProgram, [5, 6, 7]), function ($q) use ($semester) {
+                            $q->where('semid', $semester);
+                        })
+                        ->distinct()
+                        ->pluck('studid')
+                        ->toArray();
+
+                    if (empty($studentsWithPayments)) {
+                        // No students with payments, return empty result
+                        return response()->json([
+                            'success' => true,
+                            'data' => [],
+                            'student_ids' => [],
+                            'pagination' => [
+                                'current_page' => $page,
+                                'per_page' => $perPage,
+                                'total' => 0,
+                                'total_pages' => 0,
+                                'last_page' => 0,
+                                'next_page' => null,
+                                'prev_page' => null,
+                                'from' => 0,
+                                'to' => 0,
+                            ],
+                            'filters_applied' => $this->getAppliedFilters($request),
+                        ]);
+                    } else {
+                        // Phase 2: Fetch student data for those with payments
+                        $potentialStudents = $query->whereIn('si.id', $studentsWithPayments)->get();
+
+                        // Phase 3: Add financial data and filter by actual total_overpayment
+                        $potentialStudents = $potentialStudents->map(function ($student) use ($enrolledStudentIds) {
+                            $student->is_enrolled = $enrolledStudentIds->contains($student->id) ? 1 : 0;
+                            return $student;
+                        });
+
+                        // Resolve feesid from active enrollment when needed
+                        $potentialStudents = $potentialStudents->map(function ($student) use ($activeSyId, $activeSemId) {
+                            if (!empty($student->feesid)) {
+                                return $student;
+                            }
+                            $level = (int) ($student->levelid ?? 0);
+                            if ($activeSyId) {
+                                if ($level >= 14 && $level <= 15) {
+                                    $enrollment = DB::table('sh_enrolledstud')
+                                        ->where('studid', $student->id)
+                                        ->where('syid', $activeSyId)
+                                        ->when($activeSemId, fn($q) => $q->where('semid', $activeSemId))
+                                        ->where('deleted', 0)
+                                        ->orderByDesc('id')
+                                        ->first();
+                                } elseif ($level >= 17 && $level <= 25) {
+                                    $enrollment = DB::table('college_enrolledstud')
+                                        ->where('studid', $student->id)
+                                        ->where('syid', $activeSyId)
+                                        ->when($activeSemId, fn($q) => $q->where('semid', $activeSemId))
+                                        ->where('deleted', 0)
+                                        ->orderByDesc('id')
+                                        ->first();
+                                } else {
+                                    $enrollment = DB::table('enrolledstud')
+                                        ->where('studid', $student->id)
+                                        ->where('syid', $activeSyId)
+                                        ->where('deleted', 0)
+                                        ->orderByDesc('id')
+                                        ->first();
+                                }
+                                if ($enrollment && !empty($enrollment->feesid)) {
+                                    $student->feesid = $enrollment->feesid;
+                                }
+                            }
+                            return $student;
+                        });
+
+                        // Add financial data and status description
+                        $potentialStudents = $this->addFinancialData($potentialStudents, $schoolYear, $semester, $academicProgram);
+                        $potentialStudents = $this->addStudentStatusDescription($potentialStudents);
+
+                        // Filter by actual total_overpayment > 0
+                        $overpaidStudents = $potentialStudents->filter(function ($student) {
+                            $totalOverpayment = $student->financial_data['totals']['total_overpayment'] ?? 0;
+                            return $totalOverpayment > 0;
+                        });
+
+                        // Sort the filtered students
+                        $overpaidStudents = $overpaidStudents->sort(function ($a, $b) use ($enrolledStudentIds) {
+                            // 1. Enrolled students first
+                            $aEnrolled = $enrolledStudentIds->contains($a->id) ? 0 : 1;
+                            $bEnrolled = $enrolledStudentIds->contains($b->id) ? 0 : 1;
+                            if ($aEnrolled !== $bEnrolled) {
+                                return $aEnrolled - $bEnrolled;
+                            }
+                            // 2. Students with feesid first
+                            $aHasFees = !empty($a->feesid) ? 0 : 1;
+                            $bHasFees = !empty($b->feesid) ? 0 : 1;
+                            if ($aHasFees !== $bHasFees) {
+                                return $aHasFees - $bHasFees;
+                            }
+                            // 3. By levelid ascending
+                            if ($a->levelid != $b->levelid) {
+                                return ($a->levelid ?? 0) - ($b->levelid ?? 0);
+                            }
+                            // 4. By lastname ascending
+                            $lastnameCmp = strcasecmp($a->lastname ?? '', $b->lastname ?? '');
+                            if ($lastnameCmp !== 0) {
+                                return $lastnameCmp;
+                            }
+                            // 5. By firstname ascending
+                            return strcasecmp($a->firstname ?? '', $b->firstname ?? '');
+                        })->values();
+
+                        // Update total and apply pagination
+                        $total = $overpaidStudents->count();
+                        $studentIds = $overpaidStudents->pluck('id')->toArray();
+                        $students = $overpaidStudents->slice($offset, $perPage)->values();
+
+                        // Return early since we already have financial data
+                        return response()->json([
+                            'success' => true,
+                            'data' => $students->values(),
+                            'student_ids' => $studentIds,
+                            'pagination' => [
+                                'current_page' => $page,
+                                'per_page' => $perPage,
+                                'total' => $total,
+                                'total_pages' => ceil($total / $perPage),
+                                'last_page' => ceil($total / $perPage),
+                                'next_page' => $page < ceil($total / $perPage) ? $page + 1 : null,
+                                'prev_page' => $page > 1 ? $page - 1 : null,
+                                'from' => $total > 0 ? $offset + 1 : 0,
+                                'to' => min($offset + $perPage, $total),
+                            ],
+                            'filters_applied' => $this->getAppliedFilters($request),
+                        ]);
+                    }
+                } else {
+                    // UNPAID/FULLY_PAID FILTER: Use quick calculation (fast and reasonably accurate)
+                    // Phase 1: Get quick payment status for all matching student IDs
+                    $quickPaymentStatus = $this->getQuickPaymentStatus($studentIds, $schoolYear, $semester, $academicProgram);
+
+                    // Phase 2: Filter student IDs by payment status
+                    $filteredIds = array_filter($studentIds, function ($studId) use ($quickPaymentStatus, $paymentFilter) {
+                        $status = $quickPaymentStatus[$studId] ?? null;
+                        if (!$status) {
+                            return $paymentFilter === 'unpaid';
+                        }
+
+                        $balance = (float) $status['balance'];
+                        $overpayment = (float) $status['overpayment'];
+
+                        switch ($paymentFilter) {
+                            case 'unpaid':
+                                return $balance > 0;
+                            case 'fully_paid':
+                                return $balance <= 0 && $overpayment <= 0;
+                            default:
+                                return true;
+                        }
+                    });
+
+                    // Update total and studentIds with filtered results
+                    $total = count($filteredIds);
+                    $studentIds = array_values($filteredIds);
+
+                    // Phase 3: Apply pagination to filtered IDs
+                    $paginatedIds = array_slice($studentIds, $offset, $perPage);
+
+                    // Phase 4: Fetch full student data ONLY for paginated IDs
+                    if (empty($paginatedIds)) {
+                        $students = collect();
+                    } else {
+                        if ($enrolledStudentIds->isNotEmpty()) {
+                            $enrolledIdsArray = $enrolledStudentIds->toArray();
+                            $placeholders = implode(',', array_fill(0, count($enrolledIdsArray), '?'));
+                            $students = $query->whereIn('si.id', $paginatedIds)
+                                ->orderByRaw("CASE WHEN si.id IN ({$placeholders}) THEN 0 ELSE 1 END", $enrolledIdsArray)
+                                ->orderByRaw("CASE WHEN si.feesid IS NOT NULL AND si.feesid != '' AND si.feesid != 0 THEN 0 ELSE 1 END")
+                                ->orderBy('si.levelid', 'asc')
+                                ->orderBy('si.lastname')
+                                ->orderBy('si.firstname')
+                                ->get();
+                        } else {
+                            $students = $query->whereIn('si.id', $paginatedIds)
+                                ->orderBy('si.studstatus', 'desc')
+                                ->orderByRaw("CASE WHEN si.feesid IS NOT NULL AND si.feesid != '' AND si.feesid != 0 THEN 0 ELSE 1 END")
+                                ->orderBy('si.levelid', 'asc')
+                                ->orderBy('si.lastname')
+                                ->orderBy('si.firstname')
+                                ->get();
+                        }
+                    }
+                }
             } else {
-                // Order by enrollment status, has fees, levelid, then name
-                $students = $query->orderBy('si.studstatus', 'desc')
-                    ->orderByRaw("CASE WHEN si.feesid IS NOT NULL AND si.feesid != '' AND si.feesid != 0 THEN 0 ELSE 1 END")
-                    ->orderBy('si.levelid', 'asc')
-                    ->orderBy('si.lastname')
-                    ->orderBy('si.firstname')
-                    ->offset($offset)
-                    ->limit($perPage)
-                    ->get();
+                // Normal flow without payment filtering
+                // Order by:
+                // 1. Enrollment status (enrolled students ALWAYS first, regardless of level)
+                // 2. Has fees (students with feesid first within each group)
+                // 3. levelid (lowest level first within each group)
+                // 4. Name (lastname, firstname)
+                if ($enrolledStudentIds->isNotEmpty()) {
+                    $enrolledIdsArray = $enrolledStudentIds->toArray();
+                    $placeholders = implode(',', array_fill(0, count($enrolledIdsArray), '?'));
+                    $students = $query->orderByRaw("CASE WHEN si.id IN ({$placeholders}) THEN 0 ELSE 1 END", $enrolledIdsArray)
+                        ->orderByRaw("CASE WHEN si.feesid IS NOT NULL AND si.feesid != '' AND si.feesid != 0 THEN 0 ELSE 1 END")
+                        ->orderBy('si.levelid', 'asc')
+                        ->orderBy('si.lastname')
+                        ->orderBy('si.firstname')
+                        ->offset($offset)
+                        ->limit($perPage)
+                        ->get();
+                } else {
+                    // Order by enrollment status, has fees, levelid, then name
+                    $students = $query->orderBy('si.studstatus', 'desc')
+                        ->orderByRaw("CASE WHEN si.feesid IS NOT NULL AND si.feesid != '' AND si.feesid != 0 THEN 0 ELSE 1 END")
+                        ->orderBy('si.levelid', 'asc')
+                        ->orderBy('si.lastname')
+                        ->orderBy('si.firstname')
+                        ->offset($offset)
+                        ->limit($perPage)
+                        ->get();
+                }
             }
 
             // Add enrollment status flag to each student
@@ -1609,7 +1820,7 @@ class StudentAccountV2Controller extends Controller
             }
 
             // Calculate pagination
-            $lastPage = ceil($total / $perPage);
+            $lastPage = max(1, ceil($total / max(1, $perPage)));
             $from = $total > 0 ? $offset + 1 : 0;
             $to = min($offset + $perPage, $total);
             $nextPage = $page < $lastPage ? $page + 1 : null;
@@ -1732,17 +1943,283 @@ class StudentAccountV2Controller extends Controller
             ->get()
             ->keyBy('studid');
 
+        $refundPayments = $this->getRefundTotalsByStudent($studentIds, $schoolYear, $semester);
+
         // Merge all payment sources
         $result = collect();
         foreach ($studentIds as $studid) {
             $payment = optional($payments->get($studid))->amount ?? 0;
             $studledger = optional($studledgerPayments->get($studid))->amount ?? 0;
             $adjustment = optional($adjustmentCredits->get($studid))->amount ?? 0;
+            $refundPayment = optional($refundPayments->get($studid))->amount ?? 0;
 
-            $result->put($studid, $payment + $studledger + $adjustment);
+            $result->put($studid, $payment + $studledger + $adjustment + $refundPayment);
         }
 
         return $result;
+    }
+
+    private function getRefundTypeLabel($refundType)
+    {
+        switch ((int) $refundType) {
+            case 1:
+                return 'Cash/Cheque';
+            case 2:
+                return 'Forwarded to Next SY/Sem';
+            case 3:
+                return 'Forwarded to Sibling';
+            default:
+                return 'Refunded';
+        }
+    }
+
+    private function applyRefundSemFilter($query, $column, $semid)
+    {
+        if ($semid === null) {
+            $query->where(function ($q) use ($column) {
+                $q->whereNull($column)
+                    ->orWhere($column, 0);
+            });
+            return;
+        }
+
+        $query->where($column, $semid);
+    }
+
+    private function getRefundFlagForTerm($studid, $syid, $semid, $levelid = null)
+    {
+        $tables = [];
+
+        if ($levelid !== null) {
+            if ($levelid == 14 || $levelid == 15) {
+                $tables[] = 'sh_enrolledstud';
+            } elseif ($levelid >= 17 && $levelid <= 25) {
+                $tables[] = 'college_enrolledstud';
+            } elseif ($levelid == 26) {
+                $tables[] = 'tesda_enrolledstud';
+            } else {
+                $tables[] = 'enrolledstud';
+            }
+        }
+
+        $tables = array_values(array_unique(array_merge($tables, [
+            'college_enrolledstud',
+            'sh_enrolledstud',
+            'enrolledstud',
+            'tesda_enrolledstud',
+        ])));
+
+        foreach ($tables as $table) {
+            if (!Schema::hasTable($table)) {
+                continue;
+            }
+
+            $refundColumn = Schema::hasColumn($table, 'is_refundto')
+                ? 'is_refundto'
+                : (Schema::hasColumn($table, 'is_refund') ? 'is_refund' : null);
+
+            if (!$refundColumn) {
+                continue;
+            }
+
+            $query = DB::table($table)
+                ->where('studid', $studid)
+                ->where('deleted', 0);
+
+            if (Schema::hasColumn($table, 'syid') && $syid) {
+                $query->where('syid', $syid);
+            }
+
+            if ($semid !== null && Schema::hasColumn($table, 'semid')) {
+                $query->where('semid', $semid);
+            }
+
+            $value = $query->value($refundColumn);
+            if ($value !== null) {
+                return (int) $value;
+            }
+        }
+
+        return 0;
+    }
+
+    private function getRefundSummaryForTerm($studid, $syid, $semid, $levelid = null)
+    {
+        $isRefunded = $this->getRefundFlagForTerm($studid, $syid, $semid, $levelid);
+
+        if (!$isRefunded) {
+            return [
+                'is_refunded' => 0,
+                'refund_amount' => 0,
+                'refund_types' => [],
+                'refund_label' => ''
+            ];
+        }
+
+        $isBasicLevel = $levelid !== null && (($levelid >= 1 && $levelid <= 13) || $levelid == 16);
+        $applySemFilter = !$isBasicLevel && $semid !== null;
+
+        $refundsQuery = DB::table('refunds as r')
+            ->join('refund_details as rd', 'r.id', '=', 'rd.refund_id')
+            ->select('r.refund_type', DB::raw('SUM(rd.amount) as refund_amount'))
+            ->where(function ($query) use ($studid, $syid, $semid, $applySemFilter) {
+                $query->where(function ($sub) use ($studid, $syid, $semid, $applySemFilter) {
+                    $sub->where('r.refund_type', 1)
+                        ->where('r.studid', $studid)
+                        ->where('r.syid', $syid);
+                    if ($applySemFilter) {
+                        $this->applyRefundSemFilter($sub, 'r.semid', $semid);
+                    }
+                })->orWhere(function ($sub) use ($studid, $syid, $semid, $applySemFilter) {
+                    $sub->where('r.refund_type', 2)
+                        ->where('r.studid', $studid)
+                        ->where('r.forwarded_syid', $syid);
+                    if ($applySemFilter) {
+                        $this->applyRefundSemFilter($sub, 'r.forwarded_semid', $semid);
+                    }
+                })->orWhere(function ($sub) use ($studid, $syid, $semid, $applySemFilter) {
+                    $sub->where('r.refund_type', 3)
+                        ->where('r.sibling_studid', $studid)
+                        ->where('r.sibling_syid', $syid);
+                    if ($applySemFilter) {
+                        $this->applyRefundSemFilter($sub, 'r.sibling_semid', $semid);
+                    }
+                });
+            })
+            ->groupBy('r.refund_type');
+
+        if (Schema::hasColumn('refunds', 'deleted')) {
+            $refundsQuery->where('r.deleted', 0);
+        }
+
+        $refunds = $refundsQuery->get();
+
+        if ($refunds->isEmpty()) {
+            return [
+                'is_refunded' => (int) $isRefunded,
+                'refund_amount' => 0,
+                'refund_types' => [],
+                'refund_label' => ''
+            ];
+        }
+
+        $refundAmount = round($refunds->sum('refund_amount'), 2);
+        $refundTypes = $refunds->pluck('refund_type')->unique()->values()->all();
+        $refundLabels = collect($refundTypes)
+            ->map(function ($type) {
+                return $this->getRefundTypeLabel($type);
+            })
+            ->filter()
+            ->values()
+            ->all();
+
+        return [
+            'is_refunded' => (int) $isRefunded,
+            'refund_amount' => $refundAmount,
+            'refund_types' => $refundTypes,
+            'refund_label' => implode(', ', $refundLabels)
+        ];
+    }
+
+    private function getRefundPaymentDetailsForTerm($studid, $syid, $semid, $levelid = null)
+    {
+        if (!$studid || !$syid) {
+            return collect();
+        }
+
+        $isBasicLevel = $levelid !== null && (($levelid >= 1 && $levelid <= 13) || $levelid == 16);
+        $applySemFilter = !$isBasicLevel && $semid !== null;
+
+        $refundsQuery = DB::table('refunds as r')
+            ->join('refund_details as rd', 'r.id', '=', 'rd.refund_id')
+            ->select(
+                'r.id as refund_id',
+                'r.refund_type',
+                'r.refundeddatetime',
+                'rd.classid',
+                'rd.itemid',
+                'rd.paymentsetupdetail_id',
+                'rd.amount',
+                'rd.item_management_id',
+                'rd.bookid'
+            )
+            ->whereIn('r.refund_type', [2, 3])
+            ->where('rd.amount', '>', 0)
+            ->where(function ($query) use ($studid, $syid, $semid, $applySemFilter) {
+                $query->where(function ($sub) use ($studid, $syid, $semid, $applySemFilter) {
+                    $sub->where('r.refund_type', 2)
+                        ->where('r.studid', $studid)
+                        ->where('r.forwarded_syid', $syid);
+                    if ($applySemFilter) {
+                        $this->applyRefundSemFilter($sub, 'r.forwarded_semid', $semid);
+                    }
+                })->orWhere(function ($sub) use ($studid, $syid, $semid, $applySemFilter) {
+                    $sub->where('r.refund_type', 3)
+                        ->where('r.sibling_studid', $studid)
+                        ->where('r.sibling_syid', $syid);
+                    if ($applySemFilter) {
+                        $this->applyRefundSemFilter($sub, 'r.sibling_semid', $semid);
+                    }
+                });
+            });
+
+        if (Schema::hasColumn('refunds', 'deleted')) {
+            $refundsQuery->where('r.deleted', 0);
+        }
+
+        return $refundsQuery->get();
+    }
+
+    private function getRefundTotalsByStudent($studentIds, $syid, $semid)
+    {
+        if (empty($studentIds) || !$syid) {
+            return collect();
+        }
+
+        $nextSyQuery = DB::table('refunds as r')
+            ->join('refund_details as rd', 'r.id', '=', 'rd.refund_id')
+            ->select('r.studid as studid', DB::raw('SUM(rd.amount) as amount'))
+            ->whereIn('r.studid', $studentIds)
+            ->where('r.refund_type', 2)
+            ->where('r.forwarded_syid', $syid)
+            ->groupBy('r.studid');
+
+        if (Schema::hasColumn('refunds', 'deleted')) {
+            $nextSyQuery->where('r.deleted', 0);
+        }
+
+        $this->applyRefundSemFilter($nextSyQuery, 'r.forwarded_semid', $semid);
+        $nextSyRefunds = $nextSyQuery->get();
+
+        $siblingQuery = DB::table('refunds as r')
+            ->join('refund_details as rd', 'r.id', '=', 'rd.refund_id')
+            ->select('r.sibling_studid as studid', DB::raw('SUM(rd.amount) as amount'))
+            ->whereIn('r.sibling_studid', $studentIds)
+            ->where('r.refund_type', 3)
+            ->where('r.sibling_syid', $syid)
+            ->groupBy('r.sibling_studid');
+
+        if (Schema::hasColumn('refunds', 'deleted')) {
+            $siblingQuery->where('r.deleted', 0);
+        }
+
+        $this->applyRefundSemFilter($siblingQuery, 'r.sibling_semid', $semid);
+        $siblingRefunds = $siblingQuery->get();
+
+        $totals = collect();
+
+        foreach ($nextSyRefunds as $row) {
+            $totals->put($row->studid, (float) $row->amount);
+        }
+
+        foreach ($siblingRefunds as $row) {
+            $current = $totals->get($row->studid, 0);
+            $totals->put($row->studid, $current + (float) $row->amount);
+        }
+
+        return $totals->map(function ($amount) {
+            return (object) ['amount' => (float) $amount];
+        });
     }
 
     /**
@@ -2028,6 +2505,12 @@ class StudentAccountV2Controller extends Controller
 
                         // Get total overpayment from the schedule data (calculated with cascading)
                         $totalOverpayment = $scheduleData['total_overpayment'] ?? 0;
+                        $refundInfo = $scheduleData['refund_info'] ?? null;
+                        $displayOverpayment = $totalOverpayment;
+
+                        if (is_array($refundInfo) && !empty($refundInfo['is_refunded'])) {
+                            $displayOverpayment = 0;
+                        }
 
                         // Calculate full balance (all due dates including future)
                         $fullBalance = round(array_sum(array_column($schedule, 'balance')), 2);
@@ -2055,6 +2538,7 @@ class StudentAccountV2Controller extends Controller
                             'current_due_date' => $currentDueDate,
                             'due_dates' => $schedule, // Send all due dates to frontend
                             'outside_fees' => $outsideFees, // Send outside fees to frontend
+                            'refund_info' => $refundInfo,
                             'syid' => $schoolYear,
                             'semid' => $semester,
                             'totals' => [
@@ -2063,7 +2547,7 @@ class StudentAccountV2Controller extends Controller
                                 'current_balance' => round($currentBalance, 2), // Only overdue + current month
                                 'full_balance' => round($fullBalance, 2), // All balances including future
                                 'total_balance' => round($fullBalance, 2), // For backward compatibility, use full balance
-                                'total_overpayment' => round($totalOverpayment, 2),
+                                'total_overpayment' => round($displayOverpayment, 2),
                             ]
                         ];
                     } else {
@@ -2709,6 +3193,76 @@ class StudentAccountV2Controller extends Controller
                     ->orderBy('ct.ornum')
                     ->get();
 
+                $studentPaymentsRaw = collect($studentPaymentsRaw);
+                $refundPaymentDetails = $this->getRefundPaymentDetailsForTerm($studid, $schoolYear, $semester, $student->levelid ?? null);
+                $refundPaymentsByClass = [];
+                $refundPaymentsByClassAndSchedule = [];
+                $refundPaymentsByClassScheduleItemMgmt = [];
+
+                if ($refundPaymentDetails->isNotEmpty()) {
+                    $refundTotalsById = $refundPaymentDetails->groupBy('refund_id')->map(function ($group) {
+                        return $group->sum('amount');
+                    });
+
+                    $refundPaymentRows = $refundPaymentDetails->map(function ($detail) use ($refundTotalsById, $schoolYear) {
+                        $refundTotal = (float) ($refundTotalsById[$detail->refund_id] ?? $detail->amount ?? 0);
+                        $refundLabel = $this->getRefundTypeLabel($detail->refund_type ?? null);
+                        $particulars = $refundLabel ? 'REFUND - ' . strtoupper($refundLabel) : 'REFUND';
+
+                        return (object) [
+                            'ornum' => 'RF-' . $detail->refund_id,
+                            'transdate' => $detail->refundeddatetime ?? now(),
+                            'transno' => 'RF-' . $detail->refund_id,
+                            'totalamount' => $refundTotal,
+                            'amountpaid' => $refundTotal,
+                            'change_amount' => 0,
+                            'classid' => $detail->classid,
+                            'item_management_id' => $detail->item_management_id,
+                            'amount' => (float) ($detail->amount ?? 0),
+                            'particulars' => $particulars,
+                            'paymentsetupdetail_id' => $detail->paymentsetupdetail_id,
+                            'payment_syid' => $schoolYear,
+                            'itemids' => $detail->itemid ? (string) $detail->itemid : null
+                        ];
+                    });
+
+                    $studentPaymentsRaw = $studentPaymentsRaw->concat($refundPaymentRows)->values();
+
+                    foreach ($refundPaymentDetails as $detail) {
+                        $classid = $detail->classid;
+                        if ($classid === null) {
+                            continue;
+                        }
+
+                        $amount = (float) ($detail->amount ?? 0);
+                        if (!isset($refundPaymentsByClass[$classid])) {
+                            $refundPaymentsByClass[$classid] = 0;
+                        }
+                        $refundPaymentsByClass[$classid] += $amount;
+
+                        $scheduleKey = $detail->paymentsetupdetail_id ?? 'no_schedule';
+                        if (!isset($refundPaymentsByClassAndSchedule[$classid])) {
+                            $refundPaymentsByClassAndSchedule[$classid] = [];
+                        }
+                        if (!isset($refundPaymentsByClassAndSchedule[$classid][$scheduleKey])) {
+                            $refundPaymentsByClassAndSchedule[$classid][$scheduleKey] = 0;
+                        }
+                        $refundPaymentsByClassAndSchedule[$classid][$scheduleKey] += $amount;
+
+                        $itemMgmtKey = !empty($detail->item_management_id) ? (string) $detail->item_management_id : 'none';
+                        if (!isset($refundPaymentsByClassScheduleItemMgmt[$classid])) {
+                            $refundPaymentsByClassScheduleItemMgmt[$classid] = [];
+                        }
+                        if (!isset($refundPaymentsByClassScheduleItemMgmt[$classid][$scheduleKey])) {
+                            $refundPaymentsByClassScheduleItemMgmt[$classid][$scheduleKey] = [];
+                        }
+                        if (!isset($refundPaymentsByClassScheduleItemMgmt[$classid][$scheduleKey][$itemMgmtKey])) {
+                            $refundPaymentsByClassScheduleItemMgmt[$classid][$scheduleKey][$itemMgmtKey] = 0;
+                        }
+                        $refundPaymentsByClassScheduleItemMgmt[$classid][$scheduleKey][$itemMgmtKey] += $amount;
+                    }
+                }
+
                 // Extract adjustment descriptions from debit adjustments
                 // This is done BEFORE building payment queue to exclude adjustment payments
                 $adjustmentDescriptionsFromDebitAdjustments = [];
@@ -2747,6 +3301,22 @@ class StudentAccountV2Controller extends Controller
                     $paymentsByTransaction[$transno]['items'][] = $payment;
                 }
 
+                // Preload cashtrans totals per transaction to detect mixed SY rows
+                $cashTransTotalsByTransno = collect();
+                if (!empty($paymentsByTransaction)) {
+                    $transnos = array_keys($paymentsByTransaction);
+                    $cashTransTotalsByTransno = DB::table('chrngcashtrans')
+                        ->select('transno')
+                        ->selectRaw('SUM(amount) as total_amount')
+                        ->selectRaw('SUM(CASE WHEN syid = ? THEN amount ELSE 0 END) as total_amount_target', [$schoolYear])
+                        ->whereIn('transno', $transnos)
+                        ->where('studid', $studid)
+                        ->where('deleted', 0)
+                        ->groupBy('transno')
+                        ->get()
+                        ->keyBy('transno');
+                }
+
                 // Calculate overpayment per transaction and distribute to first item
                 $processedPayments = [];
                 foreach ($paymentsByTransaction as $transno => $transaction) {
@@ -2759,8 +3329,17 @@ class StudentAccountV2Controller extends Controller
                     $amountPaid = (float) ($transaction['amountpaid'] ?? 0);
                     $changeAmount = $transaction['change_amount'];
 
+                    // If the transaction mixes other school years, skip overpayment allocation for this term.
+                    $hasOtherSy = false;
+                    $cashTotals = $cashTransTotalsByTransno->get($transno);
+                    if ($cashTotals) {
+                        $totalAll = (float) ($cashTotals->total_amount ?? 0);
+                        $totalTarget = (float) ($cashTotals->total_amount_target ?? 0);
+                        $hasOtherSy = ($totalAll - $totalTarget) > 0.01;
+                    }
+
                     // Calculate overpayment: actual amount paid minus the included items and change
-                    $overpayment = max(0, $amountPaid - $includedItemsTotal - $changeAmount);
+                    $overpayment = $hasOtherSy ? 0 : max(0, $amountPaid - $includedItemsTotal - $changeAmount);
 
                     // Store overpayment for the first item in this transaction
                     $firstItemProcessed = false;
@@ -2962,6 +3541,34 @@ class StudentAccountV2Controller extends Controller
                         'total_paid' => $group->sum('total_paid')
                     ];
                 })->keyBy('classid');
+
+                if (!empty($refundPaymentsByClassAndSchedule)) {
+                    foreach ($refundPaymentsByClassAndSchedule as $classid => $scheduleMap) {
+                        if (!isset($paymentsByClassAndSchedule[$classid])) {
+                            $paymentsByClassAndSchedule[$classid] = [];
+                        }
+
+                        foreach ($scheduleMap as $scheduleKey => $amount) {
+                            if (!isset($paymentsByClassAndSchedule[$classid][$scheduleKey])) {
+                                $paymentsByClassAndSchedule[$classid][$scheduleKey] = 0;
+                            }
+                            $paymentsByClassAndSchedule[$classid][$scheduleKey] += $amount;
+                        }
+                    }
+                }
+
+                if (!empty($refundPaymentsByClass)) {
+                    foreach ($refundPaymentsByClass as $classid => $amount) {
+                        if ($payments->has($classid)) {
+                            $payments[$classid]->total_paid += $amount;
+                        } else {
+                            $payments->put($classid, (object) [
+                                'classid' => $classid,
+                                'total_paid' => $amount
+                            ]);
+                        }
+                    }
+                }
 
                 // Get book payments (matched by particulars using LIKE for book titles)
                 // ONLY include payments that match specific book titles from bookentries
@@ -3851,36 +4458,43 @@ class StudentAccountV2Controller extends Controller
 
                         // Add one-time fees (old accounts, OTHER FEES, etc.) from studledger BEFORE cascading so discounts can reach them
                         // Get both legacy "old accounts forwarded" items AND current one-time fees like OTHER FEES
-                        $otherCharges = DB::table('studledger')
-                            ->select('classid', 'particulars', DB::raw('SUM(amount) as total_amount'))
-                            ->where('studid', $studid)
-                            ->where('syid', $schoolYear)
+                        $otherCharges = DB::table('studledger as sl')
+                            ->leftJoin('items as i', 'sl.itemid', '=', 'i.id')
+                            ->select(
+                                'sl.classid',
+                                'sl.particulars',
+                                'sl.itemid',
+                                'i.description as item_description',
+                                DB::raw('SUM(sl.amount) as total_amount')
+                            )
+                            ->where('sl.studid', $studid)
+                            ->where('sl.syid', $schoolYear)
                             ->where(function ($q) use ($semester) {
-                                $q->where('semid', $semester)
-                                    ->orWhereNull('semid');
+                                $q->where('sl.semid', $semester)
+                                    ->orWhereNull('sl.semid');
                             })
-                            ->where('deleted', 0)
+                            ->where('sl.deleted', 0)
                             ->where(function ($q) {
-                                $q->where('payment', 0)
-                                    ->orWhereNull('payment');
+                                $q->where('sl.payment', 0)
+                                    ->orWhereNull('sl.payment');
                             })
-                            ->whereNotIn('classid', $tuitionFees->pluck('classid')->toArray())
+                            ->whereNotIn('sl.classid', $tuitionFees->pluck('classid')->toArray())
                             // Include old account patterns AND any classid that's not in tuitiondetail (like OTHER FEES classid 3)
                             ->where(function ($q) {
                                 // Legacy old account patterns
-                                $q->where('particulars', 'LIKE', '%OLD ACCOUNTS FORWARDED%')
-                                    ->orWhere('particulars', 'LIKE', '%BALANCE FORWARDED%')
-                                    ->orWhere('particulars', 'LIKE', '%OLD ACCOUNT%')
+                                $q->where('sl.particulars', 'LIKE', '%OLD ACCOUNTS FORWARDED%')
+                                    ->orWhere('sl.particulars', 'LIKE', '%BALANCE FORWARDED%')
+                                    ->orWhere('sl.particulars', 'LIKE', '%OLD ACCOUNT%')
                                     // Also include OTHER FEES and similar one-time charges
-                                    ->orWhere('particulars', 'LIKE', '%OTHER FEES%')
-                                    ->orWhere('classid', 3);  // OTHER FEES classid
+                                    ->orWhere('sl.particulars', 'LIKE', '%OTHER FEES%')
+                                    ->orWhere('sl.classid', 3);  // OTHER FEES classid
                             })
                             // Exclude all adjustments and other items
-                            ->where('particulars', 'NOT LIKE', '%BOOK%')  // Exclude books - handled by bookentries table
-                            ->where('particulars', 'NOT LIKE', '%ADJUSTMENT%')  // Exclude adjustments - handled by adjustments table
-                            ->where('particulars', 'NOT LIKE', 'ADJ:%')  // Exclude ADJ: prefix adjustments - handled by adjustments table
-                            ->where('particulars', 'NOT LIKE', '%BACK ACCOUNTS%')  // Exclude BACK ACCOUNTS - handled by adjustments table
-                            ->groupBy('classid', 'particulars')
+                            ->where('sl.particulars', 'NOT LIKE', '%BOOK%')  // Exclude books - handled by bookentries table
+                            ->where('sl.particulars', 'NOT LIKE', '%ADJUSTMENT%')  // Exclude adjustments - handled by adjustments table
+                            ->where('sl.particulars', 'NOT LIKE', 'ADJ:%')  // Exclude ADJ: prefix adjustments - handled by adjustments table
+                            ->where('sl.particulars', 'NOT LIKE', '%BACK ACCOUNTS%')  // Exclude BACK ACCOUNTS - handled by adjustments table
+                            ->groupBy('sl.classid', 'sl.particulars', 'sl.itemid', 'i.description')
                             ->get();
 
                         foreach ($otherCharges as $charge) {
@@ -3900,6 +4514,7 @@ class StudentAccountV2Controller extends Controller
                             $studentSchedule[] = [
                                 'paymentno' => null,
                                 'duedate' => null,
+                                'paymentsetupdetail_id' => null,
                                 'classid' => $classid,
                                 'particulars' => $charge->particulars,
                                 'amount' => $totalAmount,
@@ -3909,6 +4524,8 @@ class StudentAccountV2Controller extends Controller
                                 'discount' => $discountAmount,
                                 'is_one_time' => false,
                                 'payment_details' => [],
+                                'itemid' => $charge->itemid ?? null,
+                                'item_description' => $charge->item_description ?? null,
                             ];
                         }
 
@@ -4420,6 +5037,8 @@ class StudentAccountV2Controller extends Controller
                 foreach ($bookEntries as $book) {
                     // Use unique identifier for book entries instead of incorrect classid
                     $classid = 'BOOK_' . $book->id; // Unique identifier for book entries
+                    $bookClassId = $book->classid ?? null;
+                    $bookEntryId = $book->id;
                     $totalAmount = (float) $book->amount;
 
                     // Match payments using itemid to prevent pulling in other book titles
@@ -4454,6 +5073,9 @@ class StudentAccountV2Controller extends Controller
                             'paymentno' => null,
                             'duedate' => null,
                             'classid' => $classid,
+                            'book_classid' => $bookClassId,
+                            'itemid' => $bookEntryId,
+                            'bookid' => $book->bookid ?? null,
                             'particulars' => $particulars,
                             'amount' => $totalAmount,
                             'amountpay' => $totalPaid,
@@ -4505,6 +5127,9 @@ class StudentAccountV2Controller extends Controller
                                 'paymentno' => $schedule->paymentno,
                                 'duedate' => $schedule->duedate,
                                 'classid' => $classid,
+                                'book_classid' => $bookClassId,
+                                'itemid' => $bookEntryId,
+                                'bookid' => $book->bookid ?? null,
                                 'particulars' => $particulars,
                                 'amount' => round($dueAmount, 2),
                                 'amountpay' => round($paidForThisDue, 2),
@@ -5143,6 +5768,30 @@ class StudentAccountV2Controller extends Controller
                     }
                 }
 
+                // Only show overpayment when ALL balances are fully settled
+                $hasRemainingBalance = false;
+                foreach ($studentSchedule as $item) {
+                    if (($item['balance'] ?? 0) > 0.01) {
+                        $hasRemainingBalance = true;
+                        break;
+                    }
+                }
+                if ($hasRemainingBalance) {
+                    $totalOverpayment = 0;
+                    $totalExcessPayment = 0;
+                    $totalExcessDiscount = 0;
+                    $totalExcessCreditAdjustment = 0;
+                    $overpaymentsPerClassid = [];
+
+                    foreach ($studentSchedule as &$item) {
+                        $item['overpayment'] = 0;
+                        if (isset($item['original_excess'])) {
+                            $item['original_excess'] = 0;
+                        }
+                    }
+                    unset($item);
+                }
+
                 // Count standalone adjustments in schedule
                 $standaloneAdjCount = 0;
                 $adjustmentClassids = [];
@@ -5294,6 +5943,28 @@ class StudentAccountV2Controller extends Controller
                 }
                 unset($scheduleItem);
 
+                foreach ($studentSchedule as &$scheduleItem) {
+                    $refundPayment = 0;
+                    $classid = $scheduleItem['classid'] ?? null;
+                    if ($classid !== null) {
+                        $scheduleKey = $scheduleItem['paymentsetupdetail_id'] ?? 'no_schedule';
+                        $itemMgmtKey = !empty($scheduleItem['item_management_id'])
+                            ? (string) $scheduleItem['item_management_id']
+                            : 'none';
+
+                        if (isset($refundPaymentsByClassScheduleItemMgmt[$classid][$scheduleKey][$itemMgmtKey])) {
+                            $refundPayment = $refundPaymentsByClassScheduleItemMgmt[$classid][$scheduleKey][$itemMgmtKey];
+                        } elseif ($itemMgmtKey === 'none' && isset($refundPaymentsByClassAndSchedule[$classid][$scheduleKey])) {
+                            $refundPayment = $refundPaymentsByClassAndSchedule[$classid][$scheduleKey];
+                        }
+                    }
+
+                    $scheduleItem['refund_payment'] = round($refundPayment, 2);
+                }
+                unset($scheduleItem);
+
+                $refundInfo = $this->getRefundSummaryForTerm($studid, $schoolYear, $semester, $student->levelid);
+
                 $grouped[$studid] = [
                     'due_dates' => $studentSchedule,
                     'outside_fees' => $outsideFees->toArray(),
@@ -5303,6 +5974,7 @@ class StudentAccountV2Controller extends Controller
                     'total_excess_payment' => $totalExcessPayment,
                     'total_overpayment' => $totalOverpayment,
                     'overpayments_per_classid' => $overpaymentsPerClassid,
+                    'refund_info' => $refundInfo,
                     'debug' => $debugInfo
                 ];
             } catch (\Exception $e) {
@@ -5540,7 +6212,233 @@ class StudentAccountV2Controller extends Controller
             'section' => $request->input('section'),
             'scholarship' => $request->input('scholarship'),
             'status' => $request->input('status'),
+            'payment_filter' => $request->input('payment_filter'),
         ];
+    }
+
+    /**
+     * Quick payment status calculation for filtering (optimized for bulk operations)
+     * Returns array keyed by student ID with payment status info
+     */
+    private function getQuickPaymentStatus($studentIds, $schoolYear, $semester, $academicProgram)
+    {
+        if (empty($studentIds)) {
+            return [];
+        }
+
+        $result = [];
+        foreach ($studentIds as $id) {
+            $result[$id] = [
+                'total_fees' => 0,
+                'total_payment' => 0,
+                'balance' => 0,
+                'overpayment' => 0,
+            ];
+        }
+
+        // Get student info (levelid needed for unit-based fee calculation)
+        $studentInfo = DB::table('studinfo')
+            ->whereIn('id', $studentIds)
+            ->pluck('levelid', 'id');
+
+        // Get enrolled units for college students (levelid 17-25)
+        $collegeStudentIds = [];
+        foreach ($studentInfo as $studId => $levelId) {
+            if ($levelId >= 17 && $levelId <= 25) {
+                $collegeStudentIds[] = $studId;
+            }
+        }
+
+        $studentUnits = [];
+        if (!empty($collegeStudentIds)) {
+            try {
+                $unitsQuery = DB::table('college_studsched as css')
+                    ->join('college_classsched as cs', 'css.schedid', '=', 'cs.id')
+                    ->join('collegesubjects as subj', 'cs.subjectID', '=', 'subj.id')
+                    ->selectRaw('css.studid, SUM(subj.units) as total_units')
+                    ->whereIn('css.studid', $collegeStudentIds)
+                    ->where('cs.syid', $schoolYear)
+                    ->when($semester, function ($q) use ($semester) {
+                        $q->where('cs.semesterID', $semester);
+                    })
+                    ->where('css.deleted', 0)
+                    ->where('css.dropped', 0)
+                    ->where('cs.deleted', 0)
+                    ->groupBy('css.studid')
+                    ->pluck('total_units', 'studid');
+
+                foreach ($unitsQuery as $studId => $units) {
+                    $studentUnits[$studId] = (int) $units;
+                }
+            } catch (\Exception $e) {
+                \Log::warning('Quick payment status - units query failed: ' . $e->getMessage());
+            }
+        }
+
+        // Get total payments from chrngtrans (this is quick)
+        try {
+            $payments = DB::table('chrngtrans')
+                ->selectRaw('studid, SUM(amountpaid) as total_paid')
+                ->whereIn('studid', $studentIds)
+                ->where('cancelled', 0)
+                ->where('syid', $schoolYear)
+                ->when($semester && in_array($academicProgram, [5, 6, 7]), function ($q) use ($semester) {
+                    $q->where('semid', $semester);
+                })
+                ->groupBy('studid')
+                ->pluck('total_paid', 'studid');
+
+            foreach ($payments as $studId => $paid) {
+                if (isset($result[$studId])) {
+                    $result[$studId]['total_payment'] = (float) $paid;
+                }
+            }
+        } catch (\Exception $e) {
+            \Log::warning('Quick payment status - chrngtrans query failed: ' . $e->getMessage());
+        }
+
+        // Get tuition fees from tuitiondetail via tuitionheader
+        // For college students (levelid 17-25), multiply unit-based fees (istuition=1) by enrolled units
+        try {
+            // First, get non-unit-based fees (istuition != 1 or non-college students)
+            $regularFees = DB::table('tuitionheader as th')
+                ->join('tuitiondetail as td', 'th.id', '=', 'td.headerid')
+                ->join('studinfo as si', 'si.feesid', '=', 'th.id')
+                ->selectRaw('si.id as studid, SUM(td.amount) as total_fees')
+                ->whereIn('si.id', $studentIds)
+                ->where('td.deleted', 0)
+                ->where('th.deleted', 0)
+                ->where(function ($query) {
+                    $query->where('td.istuition', '!=', 1)
+                        ->orWhereNull('td.istuition');
+                })
+                ->groupBy('si.id')
+                ->pluck('total_fees', 'studid');
+
+            foreach ($regularFees as $studId => $fees) {
+                if (isset($result[$studId])) {
+                    $result[$studId]['total_fees'] = (float) $fees;
+                }
+            }
+
+            // Get unit-based fees (istuition = 1) separately for college students
+            $unitBasedFees = DB::table('tuitionheader as th')
+                ->join('tuitiondetail as td', 'th.id', '=', 'td.headerid')
+                ->join('studinfo as si', 'si.feesid', '=', 'th.id')
+                ->selectRaw('si.id as studid, SUM(td.amount) as total_fees')
+                ->whereIn('si.id', $studentIds)
+                ->where('td.deleted', 0)
+                ->where('th.deleted', 0)
+                ->where('td.istuition', 1)
+                ->groupBy('si.id')
+                ->pluck('total_fees', 'studid');
+
+            foreach ($unitBasedFees as $studId => $fees) {
+                if (isset($result[$studId])) {
+                    $levelId = $studentInfo[$studId] ?? 0;
+                    // For college students (levelid 17-25), multiply by enrolled units
+                    if ($levelId >= 17 && $levelId <= 25) {
+                        $units = $studentUnits[$studId] ?? 0;
+                        if ($units > 0) {
+                            $result[$studId]['total_fees'] += (float) $fees * $units;
+                        } else {
+                            // No enrolled units, still add base fee
+                            $result[$studId]['total_fees'] += (float) $fees;
+                        }
+                    } else {
+                        // Non-college students, add base fee
+                        $result[$studId]['total_fees'] += (float) $fees;
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            \Log::warning('Quick payment status - tuition fees query failed: ' . $e->getMessage());
+        }
+
+        // Get old account balances
+        try {
+            if (Schema::hasTable('old_student_accounts')) {
+                $oldAccounts = DB::table('old_student_accounts')
+                    ->selectRaw('stud_id, SUM(balance) as total_balance')
+                    ->whereIn('stud_id', $studentIds)
+                    ->where('deleted', 0)
+                    ->where('isforwarded', 0)
+                    ->groupBy('stud_id')
+                    ->pluck('total_balance', 'stud_id');
+
+                foreach ($oldAccounts as $studId => $balance) {
+                    if (isset($result[$studId])) {
+                        $result[$studId]['total_fees'] += (float) $balance;
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            \Log::warning('Quick payment status - old accounts query failed: ' . $e->getMessage());
+        }
+
+        // Get book entry charges
+        try {
+            if (Schema::hasTable('bookentries')) {
+                $bookCharges = DB::table('bookentries')
+                    ->selectRaw('studid, SUM(amount) as total_amount')
+                    ->whereIn('studid', $studentIds)
+                    ->where('deleted', 0)
+                    ->where('syid', $schoolYear)
+                    ->where('bestatus', 'APPROVED')
+                    ->when($semester && in_array($academicProgram, [5, 6, 7]), function ($q) use ($semester) {
+                        $q->where('semid', $semester);
+                    })
+                    ->groupBy('studid')
+                    ->pluck('total_amount', 'studid');
+
+                foreach ($bookCharges as $studId => $amount) {
+                    if (isset($result[$studId])) {
+                        $result[$studId]['total_fees'] += (float) $amount;
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            \Log::warning('Quick payment status - book entries query failed: ' . $e->getMessage());
+        }
+
+        // Get discounts to subtract from fees
+        try {
+            $discounts = DB::table('scholarshipstud as ss')
+                ->join('scholarship as s', 's.id', '=', 'ss.scholarid')
+                ->selectRaw('ss.studid, SUM(CASE WHEN s.amounttype = 1 THEN s.discamount ELSE 0 END) as total_discount')
+                ->whereIn('ss.studid', $studentIds)
+                ->where('ss.deleted', 0)
+                ->where('ss.syid', $schoolYear)
+                ->when($semester && in_array($academicProgram, [5, 6, 7]), function ($q) use ($semester) {
+                    $q->where('ss.semid', $semester);
+                })
+                ->groupBy('ss.studid')
+                ->pluck('total_discount', 'studid');
+
+            foreach ($discounts as $studId => $discount) {
+                if (isset($result[$studId])) {
+                    $result[$studId]['total_fees'] -= (float) $discount;
+                }
+            }
+        } catch (\Exception $e) {
+            \Log::warning('Quick payment status - discounts query failed: ' . $e->getMessage());
+        }
+
+        // Calculate balance and overpayment for each student
+        foreach ($result as $studId => &$data) {
+            $fees = max(0, $data['total_fees']);
+            $paid = $data['total_payment'];
+
+            $data['balance'] = $fees - $paid;
+
+            // Overpayment: if paid more than fees
+            if ($paid > $fees) {
+                $data['overpayment'] = $paid - $fees;
+                $data['balance'] = 0;
+            }
+        }
+
+        return $result;
     }
 
     /**
@@ -5607,6 +6505,8 @@ class StudentAccountV2Controller extends Controller
             // Get payment logs from chrngtrans - GROUP BY OR number to show one row per receipt
             $payments = DB::table('chrngtrans as ct')
                 ->join('chrngcashtrans as cct', 'ct.transno', '=', 'cct.transno')
+                ->leftJoin('chrngvoidtrans as cvt', 'ct.id', '=', 'cvt.chrngtransid')
+                ->leftJoin('users as voidby', 'cvt.voidby', '=', 'voidby.id')
                 ->select(
                     DB::raw("'payment' as type"),
                     'ct.ornum',
@@ -5615,11 +6515,14 @@ class StudentAccountV2Controller extends Controller
                     'ct.paymenttype_id',
                     'ct.other_paymenttype_ids',
                     DB::raw('SUM(cct.amount) as total_amount'),
-                    DB::raw('COUNT(DISTINCT cct.classid) as item_count')
+                    DB::raw('COUNT(DISTINCT cct.classid) as item_count'),
+                    DB::raw('MAX(ct.cancelled) as cancelled'),
+                    DB::raw('MAX(cvt.voidby) as voidby'),
+                    DB::raw('MAX(cvt.voiddatetime) as voiddatetime'),
+                    DB::raw('MAX(voidby.name) as voided_by')
                 )
                 ->where('ct.studid', $studid)
                 ->where('ct.syid', $syid)
-                ->where('ct.cancelled', 0)
                 ->where('cct.studid', $studid) // Filter chrngcashtrans by student ID
                 ->where('cct.deleted', 0)
                 ->where('cct.amount', '>', 0)
@@ -5689,6 +6592,10 @@ class StudentAccountV2Controller extends Controller
                     'payment_method' => $paymentMethodsDisplay,
                     'paymenttype_id' => $payment->paymenttype_id,
                     'other_paymenttype_ids' => $payment->other_paymenttype_ids,
+                    'cancelled' => (int) ($payment->cancelled ?? 0),
+                    'voidby' => $payment->voidby ? (int) $payment->voidby : null,
+                    'voided_by' => $payment->voided_by,
+                    'voiddatetime' => $payment->voiddatetime,
                 ];
             }
 
@@ -10576,6 +11483,8 @@ class StudentAccountV2Controller extends Controller
             $response['monthly_assessments'] = $termData['monthly_assessments'];
             $response['discounts_adjustments'] = $termData['discounts_adjustments'];
             $response['total_overpayment'] = $termData['total_overpayment'] ?? 0;
+            $response['refund_info'] = $termData['refund_info'] ?? null;
+            $response['is_refunded'] = $termData['is_refunded'] ?? 0;
         }
 
         // Get old account balances
@@ -10895,8 +11804,10 @@ class StudentAccountV2Controller extends Controller
                 'ti.itemid',
                 'i.description as item_description',
                 'ti.amount as item_amount',
+                'ti.payment_priority_sequence',
                 'ti.createddatetime'
             ])
+            ->orderByRaw('CASE WHEN ti.payment_priority_sequence IS NULL OR ti.payment_priority_sequence < 1 THEN 9999 ELSE ti.payment_priority_sequence END asc')
             ->orderBy('ti.createddatetime', 'asc')
             ->get();
 
@@ -10911,6 +11822,9 @@ class StudentAccountV2Controller extends Controller
                     'particulars' => $row->item_description ?? 'Unknown Item',
                     'amount' => round((float) $row->item_amount, 2),
                     'classid' => $row->classid,
+                    'payment_priority_sequence' => ((int) ($row->payment_priority_sequence ?? 0)) > 0
+                        ? (int) $row->payment_priority_sequence
+                        : 9999,
                     'createddatetime' => $row->createddatetime ?? null,
                 ];
             }
@@ -11030,8 +11944,10 @@ class StudentAccountV2Controller extends Controller
                         // Sort tuition items by payment_priority_sequence (fallback to createddatetime)
                         $sortedTuitionItems = $tuitionItemsByClassId[$classId];
                         usort($sortedTuitionItems, function ($a, $b) {
-                            $priorityA = $a['payment_priority_sequence'] ?? 9999;
-                            $priorityB = $b['payment_priority_sequence'] ?? 9999;
+                            $priorityA = (int) ($a['payment_priority_sequence'] ?? 0);
+                            $priorityB = (int) ($b['payment_priority_sequence'] ?? 0);
+                            $priorityA = $priorityA > 0 ? $priorityA : 9999;
+                            $priorityB = $priorityB > 0 ? $priorityB : 9999;
                             if ($priorityA != $priorityB) {
                                 return $priorityA <=> $priorityB;
                             }
@@ -11086,8 +12002,10 @@ class StudentAccountV2Controller extends Controller
                         // Sort tuition items by priority (createddatetime) to maintain order
                         $sortedTuitionItems = $tuitionItemsByClassId[$classId];
                         usort($sortedTuitionItems, function ($a, $b) {
-                            $priorityA = $a['payment_priority_sequence'] ?? 9999;
-                            $priorityB = $b['payment_priority_sequence'] ?? 9999;
+                            $priorityA = (int) ($a['payment_priority_sequence'] ?? 0);
+                            $priorityB = (int) ($b['payment_priority_sequence'] ?? 0);
+                            $priorityA = $priorityA > 0 ? $priorityA : 9999;
+                            $priorityB = $priorityB > 0 ? $priorityB : 9999;
                             if ($priorityA != $priorityB) {
                                 return $priorityA <=> $priorityB;
                             }
@@ -11467,6 +12385,8 @@ class StudentAccountV2Controller extends Controller
                 'monthly_assessments' => [],
                 'discounts_adjustments' => [],
                 'total_overpayment' => 0,
+                'refund_info' => null,
+                'is_refunded' => 0,
                 'debug_due_date_items' => [],
                 'debug_lab_fee_schedule_summary' => [],
             ];
@@ -11474,6 +12394,7 @@ class StudentAccountV2Controller extends Controller
 
         $schedule = $schedules[$studid];
         $dueDates = $schedule['due_dates'] ?? [];
+        $refundInfo = $schedule['refund_info'] ?? null;
 
         // Debug due dates for student 2
         if ($studid == 2) {
@@ -11540,6 +12461,19 @@ class StudentAccountV2Controller extends Controller
                 ];
             })
             ->toArray();
+
+        $refundPaymentDetails = $this->getRefundPaymentDetailsForTerm($studid, $syid, $semid, $studentInfo->levelid ?? null);
+        if ($refundPaymentDetails->isNotEmpty()) {
+            foreach ($refundPaymentDetails as $detail) {
+                if ($detail->classid === null || $detail->itemid === null) {
+                    continue;
+                }
+
+                $psdKey = $detail->paymentsetupdetail_id ?? 'none';
+                $key = $psdKey . '|' . (int) $detail->classid . '|' . (int) $detail->itemid;
+                $paymentsByScheduleItem[$key] = ($paymentsByScheduleItem[$key] ?? 0) + (float) ($detail->amount ?? 0);
+            }
+        }
 
         // Fetch book entries from bookentries table
         $bookEntriesQuery = DB::table('bookentries as be')
@@ -12139,6 +13073,7 @@ class StudentAccountV2Controller extends Controller
                     'balance' => round($itemBalance, 2),
                     'classid' => $classid,
                     'itemid' => $breakdownItemId, // Use labfeesetup itemid for laboratory fees, item itemid for others
+                    'item_description' => $item['item_description'] ?? null,
                     'paymentsetupdetail_id' => $item['paymentsetupdetail_id'] ?? null,
                     'laboratory_fee_id' => $laboratoryFeeId ?? null, // Add laboratory_fee_id for laboratory fees
                 ];
@@ -12227,12 +13162,14 @@ class StudentAccountV2Controller extends Controller
                 'paid' => $debitAdj['paid'],
                 'balance' => $debitAdj['balance'],
                 'adjustment_id' => $debitAdj['adjustment_id'],
+                'adjustmentdetail_id' => $debitAdj['adjustmentdetail_id'] ?? null,
                 'transaction_date' => $debitAdj['transaction_date'] ?? null,
                 'created_by' => $debitAdj['created_by'] ?? null,
                 'adjstatus' => $debitAdj['adjstatus'] ?? 'SUBMITTED',
                 'is_voided' => $debitAdj['is_voided'] ?? 0,
                 'mop' => $debitAdj['mop'] ?? null,
-                'items' => $debitAdj['items'] ?? [] // Include breakdown items
+                'items' => $debitAdj['items'] ?? [], // Include breakdown items
+                'adjustment_items' => $debitAdj['adjustment_items'] ?? []
             ];
         }
 
@@ -12289,6 +13226,7 @@ class StudentAccountV2Controller extends Controller
 
         $feesId = null;
         $tuitionItemsByClassId = []; // Initialize outside if block for wider scope
+        $tuitionHeaderClassIdSet = []; // classificationids present in tuitiondetail (headerid = feesId)
 
         foreach ($enrollmentTables as $table => $config) {
             $levelRange = $config['levelid'] ?? [];
@@ -12324,6 +13262,15 @@ class StudentAccountV2Controller extends Controller
 
         // If we found the tuitionheader, fetch tuition items for each classification
         if ($feesId) {
+            // Track all classifications defined in the tuition header (even if they have no tuitionitems)
+            $tuitionHeaderClassIds = DB::table('tuitiondetail')
+                ->where('headerid', $feesId)
+                ->where('deleted', 0)
+                ->pluck('classificationid')
+                ->toArray();
+            $tuitionHeaderClassIds = array_values(array_unique(array_map('intval', $tuitionHeaderClassIds)));
+            $tuitionHeaderClassIdSet = array_fill_keys($tuitionHeaderClassIds, true);
+
             // Get all tuitiondetails with their tuitionitems for this tuitionheader
             $tuitionDetailsWithItems = DB::table('tuitiondetail as td')
                 ->join('itemclassification as ic', 'td.classificationid', '=', 'ic.id')
@@ -12343,7 +13290,7 @@ class StudentAccountV2Controller extends Controller
                     'ti.payment_priority_sequence',
                     'ti.createddatetime'
                 ])
-                ->orderBy('ti.payment_priority_sequence', 'asc')
+                ->orderByRaw('CASE WHEN ti.payment_priority_sequence IS NULL OR ti.payment_priority_sequence < 1 THEN 9999 ELSE ti.payment_priority_sequence END asc')
                 ->orderBy('ti.createddatetime', 'asc')
                 ->get();
 
@@ -12358,25 +13305,74 @@ class StudentAccountV2Controller extends Controller
                         'particulars' => $row->item_description ?? 'Unknown Item',
                         'amount' => round((float) $row->item_amount, 2),
                         'classid' => $row->classid,
-                        'payment_priority_sequence' => $row->payment_priority_sequence ?? 9999,
+                        'payment_priority_sequence' => ((int) ($row->payment_priority_sequence ?? 0)) > 0
+                            ? (int) $row->payment_priority_sequence
+                            : 9999,
                         'createddatetime' => $row->createddatetime ?? null,
                     ];
                 }
             }
 
             // Build payment map by paymentsetupdetail_id | classid | itemid (exact item payments)
-            // Join cashtrans ON transno + classid to avoid multiplying rows across classifications
+            // Use a subquery to count chrngcashtrans rows per (transno, classid) to prevent Cartesian product inflation
+            // When multiple chrngcashtrans rows exist for the same transno+classid (different paymentsetupdetail_ids),
+            // divide the chrngtransitems amount by the count to distribute correctly
+            $cctCountSubquery = DB::table('chrngcashtrans')
+                ->select('transno', 'classid', DB::raw('COUNT(*) as cct_count'))
+                ->where('deleted', 0)
+                ->where('studid', $studid)
+                ->where('syid', $syid)
+                ->when($studentInfo->levelid >= 14 && $studentInfo->levelid <= 25, function ($q) use ($semid) {
+                    $q->where(function ($subQ) use ($semid) {
+                        $subQ->where('semid', $semid)->orWhereNull('semid');
+                    });
+                })
+                ->groupBy('transno', 'classid');
+
+            // Prefer exact chrngcashtrans amounts when itemid exists to avoid splitting across schedules
+            $paymentsByPsdClassItemCash = DB::table('chrngcashtrans as cct')
+                ->join('chrngtrans as ct', 'cct.transno', '=', 'ct.transno')
+                ->select(
+                    'cct.paymentsetupdetail_id',
+                    'cct.classid',
+                    'cct.itemid',
+                    DB::raw('SUM(cct.amount) as total_paid')
+                )
+                ->where('cct.studid', $studid)
+                ->where('cct.syid', $syid)
+                ->where('ct.syid', $syid)
+                ->where('ct.cancelled', 0)
+                ->where('cct.deleted', 0)
+                ->whereNotNull('cct.itemid')
+                ->when($studentInfo->levelid >= 14 && $studentInfo->levelid <= 25, function ($q) use ($semid) {
+                    $q->where('ct.semid', $semid);
+                })
+                ->when($studentInfo->levelid >= 14 && $studentInfo->levelid <= 25, function ($q) use ($semid) {
+                    $q->where(function ($subQ) use ($semid) {
+                        $subQ->where('cct.semid', $semid)->orWhereNull('cct.semid');
+                    });
+                })
+                ->groupBy('cct.paymentsetupdetail_id', 'cct.classid', 'cct.itemid')
+                ->get()
+                ->keyBy(function ($row) {
+                    return ($row->paymentsetupdetail_id ?? 'none') . '|' . $row->classid . '|' . $row->itemid;
+                });
+
             $paymentsByPsdClassItem = DB::table('chrngtrans as ct')
                 ->join('chrngtransitems as cti', 'ct.transno', '=', 'cti.chrngtransid')
                 ->join('chrngcashtrans as cct', function ($join) {
                     $join->on('ct.transno', '=', 'cct.transno')
                         ->on('cti.classid', '=', 'cct.classid');
                 })
+                ->joinSub($cctCountSubquery, 'cct_counts', function ($join) {
+                    $join->on('ct.transno', '=', 'cct_counts.transno')
+                        ->on('cti.classid', '=', 'cct_counts.classid');
+                })
                 ->select(
                     'cct.paymentsetupdetail_id',
                     'cti.classid',
                     'cti.itemid',
-                    DB::raw('SUM(cti.amount) as total_paid')
+                    DB::raw('SUM(cti.amount / cct_counts.cct_count) as total_paid')
                 )
                 ->where('ct.studid', $studid)
                 ->where('ct.syid', $syid)
@@ -12397,15 +13393,21 @@ class StudentAccountV2Controller extends Controller
                 ->keyBy(function ($row) {
                     return ($row->paymentsetupdetail_id ?? 'none') . '|' . $row->classid . '|' . $row->itemid;
                 });
+            $paymentsByPsdClassItemMerged = $paymentsByPsdClassItemCash->union($paymentsByPsdClassItem);
 
             // Fallback map by classid|itemid (for items without paymentsetupdetail_id)
+            // Reuse cctCountSubquery to prevent Cartesian product inflation
             $paymentsByClassItem = DB::table('chrngtrans as ct')
                 ->join('chrngtransitems as cti', 'ct.transno', '=', 'cti.chrngtransid')
                 ->join('chrngcashtrans as cct', function ($join) {
                     $join->on('ct.transno', '=', 'cct.transno')
                         ->on('cti.classid', '=', 'cct.classid');
                 })
-                ->select('cti.classid', 'cti.itemid', DB::raw('SUM(cti.amount) as total_paid'))
+                ->joinSub($cctCountSubquery, 'cct_counts2', function ($join) {
+                    $join->on('ct.transno', '=', 'cct_counts2.transno')
+                        ->on('cti.classid', '=', 'cct_counts2.classid');
+                })
+                ->select('cti.classid', 'cti.itemid', DB::raw('SUM(cti.amount / cct_counts2.cct_count) as total_paid'))
                 ->where('ct.studid', $studid)
                 ->where('ct.syid', $syid)
                 ->where('cct.syid', $syid)
@@ -12427,18 +13429,23 @@ class StudentAccountV2Controller extends Controller
                 });
 
             // Laboratory-safe map keyed by PSD|classid|itemid|particulars_base to avoid cross-subject mixing
+            // Reuse cctCountSubquery to prevent Cartesian product inflation
             $paymentsByPsdClassItemPart = DB::table('chrngtrans as ct')
                 ->join('chrngtransitems as cti', 'ct.transno', '=', 'cti.chrngtransid')
                 ->join('chrngcashtrans as cct', function ($join) {
                     $join->on('ct.transno', '=', 'cct.transno')
                         ->on('cti.classid', '=', 'cct.classid');
                 })
+                ->joinSub($cctCountSubquery, 'cct_counts3', function ($join) {
+                    $join->on('ct.transno', '=', 'cct_counts3.transno')
+                        ->on('cti.classid', '=', 'cct_counts3.classid');
+                })
                 ->select(
                     'cct.paymentsetupdetail_id',
                     'cti.classid',
                     'cti.itemid',
                     'cct.particulars',
-                    DB::raw('SUM(cti.amount) as total_paid')
+                    DB::raw('SUM(cti.amount / cct_counts3.cct_count) as total_paid')
                 )
                 ->where('ct.studid', $studid)
                 ->where('ct.syid', $syid)
@@ -12873,8 +13880,10 @@ class StudentAccountV2Controller extends Controller
                         // Sort tuition items by payment_priority_sequence (1, 2, 3...) to maintain order
                         $sortedTuitionItems = $tuitionItemsByClassId[$classid];
                         usort($sortedTuitionItems, function ($a, $b) {
-                            $priorityA = $a['payment_priority_sequence'] ?? 9999;
-                            $priorityB = $b['payment_priority_sequence'] ?? 9999;
+                            $priorityA = (int) ($a['payment_priority_sequence'] ?? 0);
+                            $priorityB = (int) ($b['payment_priority_sequence'] ?? 0);
+                            $priorityA = $priorityA > 0 ? $priorityA : 9999;
+                            $priorityB = $priorityB > 0 ? $priorityB : 9999;
                             if ($priorityA != $priorityB) {
                                 return $priorityA <=> $priorityB;
                             }
@@ -12886,10 +13895,42 @@ class StudentAccountV2Controller extends Controller
                             }
                             if ($dateA)
                                 return -1;
-                            if ($dateB)
-                                return 1;
-                            return 0;
-                        });
+                        if ($dateB)
+                            return 1;
+                        return 0;
+                    });
+
+                        // Prefer schedule-derived nested payments (amountpay) so school_fees stays aligned with the payment schedule.
+                        $itemsWithPayment = [];
+                        $remainingPaid = max(0, (float) $breakdownPaid);
+
+                        foreach ($sortedTuitionItems as $tuitionItem) {
+                            $itemAmount = (float) ($tuitionItem['amount'] ?? 0);
+                            if ($itemAmount <= 0) {
+                                continue;
+                            }
+
+                            $itemPayment = 0.0;
+                            if ($remainingPaid > 0) {
+                                $itemPayment = min($itemAmount, $remainingPaid);
+                                $remainingPaid -= $itemPayment;
+                            }
+
+                            $itemsWithPayment[] = [
+                                'itemid' => $tuitionItem['itemid'],
+                                'particulars' => $tuitionItem['particulars'],
+                                'amount' => round($itemAmount, 2),
+                                'payment' => round($itemPayment, 2),
+                                'balance' => round(max(0, $itemAmount - $itemPayment), 2),
+                                'classid' => $tuitionItem['classid'],
+                            ];
+                        }
+
+                        $breakdownItem['items'] = $itemsWithPayment;
+                        $breakdownItem['nested_items'] = $itemsWithPayment;
+                        $breakdownItem['payment'] = round((float) $breakdownPaid, 2);
+                        $breakdownItem['balance'] = round((float) $breakdownBalance, 2);
+                        continue;
 
                         // Check if this breakdown item has cascaded payments from payment_details
                         // If so, we should preserve those values instead of recalculating from database
@@ -12958,8 +13999,8 @@ class StudentAccountV2Controller extends Controller
                                         // Do not fall back to class-only matching for laboratory fees to avoid cross-subject payments
                                     } else {
                                         $mapKey = $psdId . '|' . $classid . '|' . $tuitionItem['itemid'];
-                                        if (isset($paymentsByPsdClassItem[$mapKey])) {
-                                            $paidExact = (float) $paymentsByPsdClassItem[$mapKey]->total_paid;
+                                        if (isset($paymentsByPsdClassItemMerged[$mapKey])) {
+                                            $paidExact = (float) $paymentsByPsdClassItemMerged[$mapKey]->total_paid;
                                         }
                                     }
                                 } else {
@@ -13130,9 +14171,20 @@ class StudentAccountV2Controller extends Controller
 
             if (isset($fee['items']) && is_array($fee['items'])) {
                 foreach ($fee['items'] as &$itm) {
+                    $psdId = $itm['paymentsetupdetail_id'] ?? null;
+                    if ($psdId !== null) {
+                        // Keep schedule-derived payment/balance for scheduled items.
+                        $itmAmount = $itm['amount'] ?? 0;
+                        $itmPaid = $itm['payment'] ?? 0;
+                        $itmBalance = $itm['balance'] ?? max(0, $itmAmount - $itmPaid);
+
+                        $totalAmount += $itmAmount;
+                        $totalPaid += $itmPaid;
+                        $totalBalance += $itmBalance;
+                        continue;
+                    }
                     // Force nested payment allocation by exact itemid from chrngtransitems
                     if (isset($itm['items']) && is_array($itm['items'])) {
-                        $psdId = $itm['paymentsetupdetail_id'] ?? null;
                         $parentPaid = 0;
                         foreach ($itm['items'] as &$sub) {
                             $paidExact = 0;
@@ -13155,8 +14207,8 @@ class StudentAccountV2Controller extends Controller
                                     // For laboratory fees, do not fall back to class-only map to avoid cross-subject payments
                                 } else {
                                     $mapKey = $psdId . '|' . ($itm['classid'] ?? $fee['classid'] ?? '') . '|' . $itemIdKey;
-                                    if (isset($paymentsByPsdClassItem[$mapKey])) {
-                                        $paidExact = (float) $paymentsByPsdClassItem[$mapKey]->total_paid;
+                                    if (isset($paymentsByPsdClassItemMerged[$mapKey])) {
+                                        $paidExact = (float) $paymentsByPsdClassItemMerged[$mapKey]->total_paid;
                                     }
                                 }
                             } else {
@@ -13221,23 +14273,6 @@ class StudentAccountV2Controller extends Controller
             }
         }
 
-        // Create a mapping of cascaded payments from dueDates by paymentsetupdetail_id
-        // This will be used to add cascaded payments to the first nested item in school_fees
-        $cascadedPaymentsByScheduleId = [];
-        foreach ($dueDates as $scheduleItem) {
-            $psdId = $scheduleItem['paymentsetupdetail_id'] ?? null;
-            if ($psdId && isset($scheduleItem['payment_details']) && is_array($scheduleItem['payment_details']) && !empty($scheduleItem['payment_details'])) {
-                // Calculate total cascaded payment from payment_details
-                $totalCascaded = 0;
-                foreach ($scheduleItem['payment_details'] as $paymentDetail) {
-                    $totalCascaded += $paymentDetail['amount'] ?? 0;
-                }
-                if ($totalCascaded > 0) {
-                    $cascadedPaymentsByScheduleId[$psdId] = $totalCascaded;
-                }
-            }
-        }
-
         // Second pass: Add nested items to school fees (always recalculate to ensure correct amounts)
         if (isset($tuitionItemsByClassId) && !empty($tuitionItemsByClassId)) {
             \Log::info('[NESTED-ITEMS-DEBUG] tuitionItemsByClassId keys:', ['keys' => array_keys($tuitionItemsByClassId)]);
@@ -13292,8 +14327,10 @@ class StudentAccountV2Controller extends Controller
                         // Sort tuition items by payment_priority_sequence (1, 2, 3...) to maintain order
                         $sortedTuitionItems = $tuitionItemsByClassId[$classid];
                         usort($sortedTuitionItems, function ($a, $b) {
-                            $priorityA = $a['payment_priority_sequence'] ?? 9999;
-                            $priorityB = $b['payment_priority_sequence'] ?? 9999;
+                            $priorityA = (int) ($a['payment_priority_sequence'] ?? 0);
+                            $priorityB = (int) ($b['payment_priority_sequence'] ?? 0);
+                            $priorityA = $priorityA > 0 ? $priorityA : 9999;
+                            $priorityB = $priorityB > 0 ? $priorityB : 9999;
                             if ($priorityA != $priorityB) {
                                 return $priorityA <=> $priorityB;
                             }
@@ -13310,10 +14347,6 @@ class StudentAccountV2Controller extends Controller
                             return 0;
                         });
 
-                        // Calculate payment and balance ratios for this breakdown
-                        $breakdownPaymentRatio = $breakdownAmount > 0 ? ($breakdownPaid / $breakdownAmount) : 0;
-                        $breakdownBalanceRatio = $breakdownAmount > 0 ? ($breakdownBalance / $breakdownAmount) : 0;
-
                         $itemsWithPayment = [];
                         $totalDistributed = 0;
 
@@ -13325,8 +14358,8 @@ class StudentAccountV2Controller extends Controller
                                 'itemid' => $singleItem['itemid'],
                                 'particulars' => $singleItem['particulars'],
                                 'amount' => round($breakdownAmount, 2),
-                                'payment' => round($breakdownPaid, 2),
-                                'balance' => round($breakdownBalance, 2),
+                                'payment' => 0,
+                                'balance' => round($breakdownAmount, 2),
                                 'classid' => $singleItem['classid'],
                             ];
                             $totalDistributed = $breakdownAmount;
@@ -13368,15 +14401,12 @@ class StudentAccountV2Controller extends Controller
 
                                 // Only add nested item if amountToFill > 0
                                 if ($amountToFill > 0) {
-                                    $itemPayment = round($amountToFill * $breakdownPaymentRatio, 2);
-                                    $itemBalance = round($amountToFill * $breakdownBalanceRatio, 2);
-
                                     $itemsWithPayment[] = [
                                         'itemid' => $itemid,
                                         'particulars' => $tuitionItem['particulars'],
                                         'amount' => round($amountToFill, 2),
-                                        'payment' => $itemPayment,
-                                        'balance' => $itemBalance,
+                                        'payment' => 0,
+                                        'balance' => round($amountToFill, 2),
                                         'classid' => $tuitionItem['classid'],
                                     ];
 
@@ -13395,11 +14425,7 @@ class StudentAccountV2Controller extends Controller
                                     // Adjust the last nested item to make the sum exact
                                     $lastIndex = count($itemsWithPayment) - 1;
                                     $itemsWithPayment[$lastIndex]['amount'] = round($itemsWithPayment[$lastIndex]['amount'] + $difference, 2);
-
-                                    // Recalculate payment and balance for the adjusted amount
-                                    $adjustedAmount = $itemsWithPayment[$lastIndex]['amount'];
-                                    $itemsWithPayment[$lastIndex]['payment'] = round($adjustedAmount * $breakdownPaymentRatio, 2);
-                                    $itemsWithPayment[$lastIndex]['balance'] = round($adjustedAmount * $breakdownBalanceRatio, 2);
+                                    $itemsWithPayment[$lastIndex]['balance'] = round($itemsWithPayment[$lastIndex]['amount'], 2);
 
                                     // Also adjust the remaining amount tracking
                                     $lastItemId = $itemsWithPayment[$lastIndex]['itemid'];
@@ -13414,43 +14440,64 @@ class StudentAccountV2Controller extends Controller
                                         'itemid' => $firstItem['itemid'],
                                         'particulars' => $firstItem['particulars'],
                                         'amount' => round($breakdownAmount, 2),
-                                        'payment' => round($breakdownPaid, 2),
-                                        'balance' => round($breakdownBalance, 2),
+                                        'payment' => 0,
+                                        'balance' => round($breakdownAmount, 2),
                                         'classid' => $firstItem['classid'],
                                     ];
                                 }
                             }
                         }
 
+                        // Allocate schedule-paid amount sequentially to nested items (priority order)
+                        $remainingPaid = max(0, (float) $breakdownPaid);
+                        foreach ($itemsWithPayment as &$ni) {
+                            $niAmount = (float) ($ni['amount'] ?? 0);
+                            $pay = ($remainingPaid > 0 && $niAmount > 0) ? min($niAmount, $remainingPaid) : 0;
+                            $ni['payment'] = round($pay, 2);
+                            $ni['balance'] = round(max(0, $niAmount - $pay), 2);
+                            $remainingPaid -= $pay;
+                        }
+                        unset($ni);
+
                         // Add tuition items as nested items to this breakdown item
                         $breakdownItem['items'] = $itemsWithPayment;
+                        $breakdownItem['nested_items'] = $itemsWithPayment;
+                    }
+                    unset($breakdownItem); // Break reference
+                }
 
-                        // Check if there are cascaded payments for this breakdown item via paymentsetupdetail_id
-                        // If so, add them to the first nested item's payment field
-                        $breakdownPsdId = $breakdownItem['paymentsetupdetail_id'] ?? null;
-                        if ($breakdownPsdId && isset($cascadedPaymentsByScheduleId[$breakdownPsdId]) && !empty($breakdownItem['items'])) {
-                            $cascadedAmount = $cascadedPaymentsByScheduleId[$breakdownPsdId];
+                // Fallback: For non-tuitionheader fees coming from studledger (e.g., forwarded old accounts),
+                // attach a single nested item using the provided itemid so Cashier V2 can display/select it.
+                if (
+                    (empty($classid) || !isset($tuitionItemsByClassId[$classid])) &&
+                    empty($schoolFee['is_laboratory_fee']) &&
+                    isset($schoolFee['items']) &&
+                    is_array($schoolFee['items'])
+                ) {
+                    foreach ($schoolFee['items'] as &$breakdownItem) {
+                        $breakdownItemId = $breakdownItem['itemid'] ?? null;
+                        $existingItems = $breakdownItem['items'] ?? null;
 
-                            // Add the cascaded amount to the first nested item
-                            $breakdownItem['items'][0]['payment'] = round(($breakdownItem['items'][0]['payment'] ?? 0) + $cascadedAmount, 2);
-                            $breakdownItem['items'][0]['balance'] = round(max(0, ($breakdownItem['items'][0]['amount'] ?? 0) - $breakdownItem['items'][0]['payment']), 2);
+                        if ($breakdownItemId && (empty($existingItems) || !is_array($existingItems))) {
+                            $amt = (float) ($breakdownItem['amount'] ?? 0);
+                            $paid = (float) ($breakdownItem['payment'] ?? 0);
+                            $pay = min($amt, max(0, $paid));
+                            $nestedLabel = $breakdownItem['item_description'] ?? $breakdownItem['particulars'] ?? ($schoolFee['particulars'] ?? 'Item');
 
-                            // Recompute parent payment/balance to include cascaded amount
-                            $nestedPaidTotal = 0;
-                            foreach ($breakdownItem['items'] as $ni) {
-                                $nestedPaidTotal += $ni['payment'] ?? 0;
-                            }
-                            $breakdownItem['payment'] = round($nestedPaidTotal, 2);
-                            $breakdownItem['balance'] = round(max(0, ($breakdownItem['amount'] ?? 0) - $nestedPaidTotal), 2);
+                            $breakdownItem['items'] = [
+                                [
+                                    'itemid' => (int) $breakdownItemId,
+                                    'particulars' => $nestedLabel,
+                                    'amount' => round($amt, 2),
+                                    'payment' => round($pay, 2),
+                                    'balance' => round(max(0, $amt - $pay), 2),
+                                    'classid' => $classid,
+                                ]
+                            ];
+                        }
 
-                            \Log::debug('[SCHOOL-FEES-CASCADED] Added cascaded payment to first nested item', [
-                                'classid' => $classid,
-                                'paymentsetupdetail_id' => $breakdownPsdId,
-                                'cascaded_amount' => $cascadedAmount,
-                                'first_nested_item_particulars' => $breakdownItem['items'][0]['particulars'] ?? null,
-                                'first_nested_item_payment' => $breakdownItem['items'][0]['payment'],
-                                'first_nested_item_balance' => $breakdownItem['items'][0]['balance']
-                            ]);
+                        if (!isset($breakdownItem['nested_items'])) {
+                            $breakdownItem['nested_items'] = $breakdownItem['items'] ?? [];
                         }
                     }
                     unset($breakdownItem); // Break reference
@@ -13556,6 +14603,17 @@ class StudentAccountV2Controller extends Controller
                         }
                     }
                     unset($breakdown);
+
+                    // Recompute fee totals from breakdowns to keep school_fees and monthly_assessments aligned
+                    $totalAmount = 0;
+                    $totalPaid = 0;
+                    foreach ($sf['items'] as $bd) {
+                        $totalAmount += (float) ($bd['amount'] ?? 0);
+                        $totalPaid += (float) ($bd['payment'] ?? 0);
+                    }
+                    $sf['total_amount'] = round($totalAmount, 2);
+                    $sf['total_paid'] = round($totalPaid, 2);
+                    $sf['total_balance'] = round(max(0, $totalAmount - $totalPaid), 2);
                 }
             }
             unset($sf);
@@ -14139,8 +15197,10 @@ class StudentAccountV2Controller extends Controller
                 // Sort tuition items by payment_priority_sequence to match school_fees order
                 $sortedTuitionItems = $tuitionItemsByClassId[$itemClassId];
                 usort($sortedTuitionItems, function ($a, $b) {
-                    $priorityA = $a['payment_priority_sequence'] ?? 9999;
-                    $priorityB = $b['payment_priority_sequence'] ?? 9999;
+                    $priorityA = (int) ($a['payment_priority_sequence'] ?? 0);
+                    $priorityB = (int) ($b['payment_priority_sequence'] ?? 0);
+                    $priorityA = $priorityA > 0 ? $priorityA : 9999;
+                    $priorityB = $priorityB > 0 ? $priorityB : 9999;
                     if ($priorityA != $priorityB) {
                         return $priorityA <=> $priorityB;
                     }
@@ -14176,20 +15236,39 @@ class StudentAccountV2Controller extends Controller
                 $item['items'] = $breakdownTuitionItems;
             }
 
-            // Check if there are cascaded payments from the payment schedule
-            // If so, add them to the first nested item's payment field
-            $cascadedPaymentAmount = 0;
-            if (isset($item['payment_details']) && is_array($item['payment_details']) && !empty($item['payment_details'])) {
-                // Calculate total cascaded payment from payment_details
-                foreach ($item['payment_details'] as $paymentDetail) {
-                    $cascadedPaymentAmount += $paymentDetail['amount'] ?? 0;
+            // Ensure nested items reflect the schedule-paid amount (amountpay) without double-counting payment_details
+            $isLabItem = isset($item['laboratory_fee_id']) && $item['laboratory_fee_id'] !== null;
+            // Fallback: for non-tuitionheader fees coming from studledger (e.g., forwarded old accounts),
+            // build a single nested item from the provided itemid so Cashier V2 can display and select it.
+            if (
+                !$isStandaloneAdjustment &&
+                !$isLabItem &&
+                empty($isItemManagement) &&
+                empty($breakdownTuitionItems) &&
+                !empty($item['itemid'])
+            ) {
+                $nestedLabel = $item['item_description'] ?? $itemParticulars;
+                $breakdownTuitionItems = [
+                    [
+                        'itemid' => (int) $item['itemid'],
+                        'particulars' => $nestedLabel,
+                        'amount' => round($baseAmount, 2),
+                        'payment' => 0,
+                        'balance' => round($baseAmount, 2),
+                        'classid' => $itemClassId,
+                    ]
+                ];
+            }
+            if (!$isStandaloneAdjustment && !$isLabItem && !empty($breakdownTuitionItems)) {
+                $remainingPaid = max(0, (float) $itemPaid);
+                foreach ($breakdownTuitionItems as &$ni) {
+                    $niAmount = (float) ($ni['amount'] ?? 0);
+                    $pay = ($remainingPaid > 0 && $niAmount > 0) ? min($niAmount, $remainingPaid) : 0;
+                    $ni['payment'] = round($pay, 2);
+                    $ni['balance'] = round(max(0, $niAmount - $pay), 2);
+                    $remainingPaid -= $pay;
                 }
-
-                // If there are nested items and cascaded payment, add the cascaded amount to the first nested item
-                if ($cascadedPaymentAmount > 0 && !empty($breakdownTuitionItems)) {
-                    $breakdownTuitionItems[0]['payment'] = round(($breakdownTuitionItems[0]['payment'] ?? 0) + $cascadedPaymentAmount, 2);
-                    $breakdownTuitionItems[0]['balance'] = round(max(0, ($breakdownTuitionItems[0]['amount'] ?? 0) - $breakdownTuitionItems[0]['payment']), 2);
-                }
+                unset($ni);
             }
 
             // Use the same amount calculation as school fees (baseAmount, excluding adjustments)
@@ -14204,6 +15283,7 @@ class StudentAccountV2Controller extends Controller
                 'id' => $item['tuitiondetail_id'] ?? $item['id'] ?? null, // Add tuitiondetail_id for payment processing
                 'tuitiondetail_id' => $item['tuitiondetail_id'] ?? $item['id'] ?? null, // Add tuitiondetail_id for payment processing
                 'itemid' => $item['itemid'] ?? null, // Add itemid for payment processing
+                'item_description' => $item['item_description'] ?? null,
                 'laboratory_fee_id' => $item['laboratory_fee_id'] ?? null, // Add laboratory_fee_id for laboratory fees
                 'item_management_id' => $itemManagementId,
                 'is_item_management' => $isItemManagement
@@ -14303,6 +15383,10 @@ class StudentAccountV2Controller extends Controller
 
                     // Recompute parent payment/balance for laboratory fee breakdown items from exact nested item payments
                     foreach ($assessment['items'] as $itemIndex => $item) {
+                        $isLabBreakdown = isset($item['laboratory_fee_id']) && $item['laboratory_fee_id'] !== null;
+                        if (!$isLabBreakdown) {
+                            continue;
+                        }
                         if (isset($item['items']) && is_array($item['items']) && !empty($item['items'])) {
                             $breakdownTuitionItems = $item['items'];
                             $breakdownAmount = $item['amount'] ?? 0;
@@ -14875,7 +15959,7 @@ class StudentAccountV2Controller extends Controller
         }
 
         // Final pass: enforce itemid-based payments on school_fees output (no proportional splits)
-        $psdMap = isset($paymentsByPsdClassItem) ? $paymentsByPsdClassItem : collect();
+        $psdMap = isset($paymentsByPsdClassItemMerged) ? $paymentsByPsdClassItemMerged : collect();
         $classMap = isset($paymentsByClassItem) ? $paymentsByClassItem : collect();
         foreach ($schoolFees as &$fee) {
             // Keep laboratory fee payments as forced from the schedule; do not remap them here
@@ -15261,6 +16345,12 @@ class StudentAccountV2Controller extends Controller
         }
 
         // Add book entries to school_fees with monthly breakdown
+        $monthlyAssessmentIndexByPsd = [];
+        foreach ($monthlyAssessments as $idx => $assessment) {
+            if (array_key_exists('paymentsetupdetail_id', $assessment) && $assessment['paymentsetupdetail_id'] !== null) {
+                $monthlyAssessmentIndexByPsd[(string) $assessment['paymentsetupdetail_id']] = $idx;
+            }
+        }
         foreach ($bookEntriesFromDB as $book) {
             $bookClassId = $book->classid; // Use actual classid from bookentries
             $bookItemId = $book->id; // Use bookentries.id as itemid
@@ -15324,6 +16414,55 @@ class StudentAccountV2Controller extends Controller
                     'itemid' => $bookItemId,
                     'is_book_entry' => true,
                     'mopid' => $mopid
+                ];
+                $oneTimeStatus = $oneTimeBalance > 0 ? 'pending' : 'paid';
+                $monthlyAssessments[] = [
+                    'paymentsetupdetail_id' => null,
+                    'due_date' => 'No Date',
+                    'assessment_label' => 'No Date',
+                    'total_due' => round($bookAmount, 2),
+                    'total_paid' => round($oneTimePayment, 2),
+                    'balance' => round($oneTimeBalance, 2),
+                    'status' => $oneTimeStatus,
+                    'breakdown' => [
+                        [
+                            'classid' => $bookClassId,
+                            'particulars' => $book->particulars,
+                            'amount' => round($bookAmount, 2),
+                            'payment' => round($oneTimePayment, 2),
+                            'balance' => round($oneTimeBalance, 2),
+                            'items' => [
+                                [
+                                    'itemid' => $bookItemId,
+                                    'particulars' => $book->particulars,
+                                    'amount' => round($bookAmount, 2),
+                                    'payment' => round($oneTimePayment, 2),
+                                    'balance' => round($oneTimeBalance, 2),
+                                    'classid' => $bookClassId,
+                                    'is_book_entry' => true
+                                ]
+                            ],
+                            'paymentsetupdetail_id' => null,
+                            'id' => $book->id,
+                            'tuitiondetail_id' => null,
+                            'itemid' => $bookItemId,
+                            'laboratory_fee_id' => null,
+                            'item_management_id' => null,
+                            'is_item_management' => false,
+                            'is_book_entry' => true,
+                            'nested_items' => [
+                                [
+                                    'itemid' => $bookItemId,
+                                    'particulars' => $book->particulars,
+                                    'amount' => round($bookAmount, 2),
+                                    'payment' => round($oneTimePayment, 2),
+                                    'balance' => round($oneTimeBalance, 2),
+                                    'classid' => $bookClassId,
+                                    'is_book_entry' => true
+                                ]
+                            ]
+                        ]
+                    ]
                 ];
                 continue;
             }
@@ -15398,12 +16537,22 @@ class StudentAccountV2Controller extends Controller
                 ];
 
                 // Add to monthly assessment breakdown
-                $assessmentIndex = null;
-                foreach ($monthlyAssessments as $idx => $assessment) {
-                    if ($assessment['paymentsetupdetail_id'] == $schedule->id) {
-                        $assessmentIndex = $idx;
-                        break;
-                    }
+                $assessmentIndex = $monthlyAssessmentIndexByPsd[(string) $schedule->id] ?? null;
+                if ($assessmentIndex === null) {
+                    $assessmentLabel = $description ?: $this->getPaymentDescriptionFallback($paymentNo);
+                    $dueDateLabel = $schedule->duedate ?? 'No Date';
+                    $monthlyAssessments[] = [
+                        'paymentsetupdetail_id' => $schedule->id,
+                        'due_date' => $dueDateLabel,
+                        'assessment_label' => $assessmentLabel,
+                        'total_due' => 0,
+                        'total_paid' => 0,
+                        'balance' => 0,
+                        'status' => 'pending',
+                        'breakdown' => []
+                    ];
+                    $assessmentIndex = count($monthlyAssessments) - 1;
+                    $monthlyAssessmentIndexByPsd[(string) $schedule->id] = $assessmentIndex;
                 }
 
                 if ($assessmentIndex !== null) {
@@ -15439,6 +16588,14 @@ class StudentAccountV2Controller extends Controller
                         $monthlyAssessments[$assessmentIndex]['balance'] + $scheduleBalance,
                         2
                     );
+                    $currentDueDate = $monthlyAssessments[$assessmentIndex]['due_date'] ?? null;
+                    if ($monthlyAssessments[$assessmentIndex]['balance'] <= 0) {
+                        $monthlyAssessments[$assessmentIndex]['status'] = 'paid';
+                    } elseif ($currentDueDate && $currentDueDate !== 'No Date' && $currentDueDate < date('Y-m-d')) {
+                        $monthlyAssessments[$assessmentIndex]['status'] = 'overdue';
+                    } else {
+                        $monthlyAssessments[$assessmentIndex]['status'] = 'pending';
+                    }
                 }
             }
 
@@ -15463,12 +16620,18 @@ class StudentAccountV2Controller extends Controller
         // Validate and flag school fees that don't have items setup
         // Only check fees from tuitionheader (not book entries, item management, or lab fees)
         foreach ($schoolFees as &$fee) {
-            $classid = $fee['classid'] ?? null;
-            $isFromTuitionHeader = !($fee['is_book_entry'] ?? false) &&
-                !($fee['is_item_management'] ?? false) &&
-                !($fee['is_laboratory_fee'] ?? false);
+            $classid = isset($fee['classid']) ? (int) $fee['classid'] : null;
+            $skipItemSetupValidation = ($fee['is_book_entry'] ?? false) ||
+                ($fee['is_item_management'] ?? false) ||
+                ($fee['is_laboratory_fee'] ?? false);
 
-            if ($isFromTuitionHeader && $classid) {
+            // Only validate "missing items" for classifications that are actually part of the tuition header.
+            // This prevents one-time studledger charges like forwarded old accounts from being flagged/hidden in Cashier V2.
+            $isFromTuitionHeader = !$skipItemSetupValidation &&
+                $classid &&
+                isset($tuitionHeaderClassIdSet[$classid]);
+
+            if ($isFromTuitionHeader) {
                 // Check if this classification has items setup in tuitionitems
                 $hasItemsSetup = isset($tuitionItemsByClassId[$classid]) &&
                     !empty($tuitionItemsByClassId[$classid]);
@@ -15504,12 +16667,24 @@ class StudentAccountV2Controller extends Controller
             ]);
         }
 
+        // Calculate total overpayment from school_fees where overpayment is already calculated
+        // The overpayment field is set during payment processing for each classification
+        $totalOverpayment = 0;
+        foreach ($schoolFees as $fee) {
+            $overpayment = $fee['overpayment'] ?? 0;
+            if ($overpayment > 0) {
+                $totalOverpayment += $overpayment;
+            }
+        }
+
         // Return the collected adjustments
         return [
             'school_fees' => $schoolFees,
             'monthly_assessments' => $monthlyAssessments,
             'discounts_adjustments' => $adjustments,
             'total_overpayment' => round($totalOverpayment, 2),
+            'refund_info' => $refundInfo,
+            'is_refunded' => $refundInfo['is_refunded'] ?? 0,
             'debug_due_date_items' => $debugDueDateItems,
             'debug_lab_fee_schedule_summary' => $labFeeScheduleSummary,
         ];
@@ -15539,6 +16714,8 @@ class StudentAccountV2Controller extends Controller
             // For basic ed (levelid < 14), ignore semid when pulling schedules/payments so payments from any sem are considered
             $isBasicLevel = ($studentInfo && (($studentInfo->levelid >= 1 && $studentInfo->levelid <= 13) || $studentInfo->levelid == 16));
             $effectiveSemid = $isBasicLevel ? null : $semid;
+            $paymentSemid = $effectiveSemid;
+            $ignoreSemidForPayments = $isBasicLevel;
 
             $schedules = self::getStudentPaymentSchedules([$studid], $syid, $effectiveSemid);
 
@@ -15558,14 +16735,24 @@ class StudentAccountV2Controller extends Controller
                 // Check if this term's balance was forwarded to the active term
                 $wasForwarded = false;
                 if ($balForwardSetup) {
-                    $forwardedBalance = DB::table('studledger')
+                    $forwardedBalanceQuery = DB::table('studledger')
                         ->where('studid', $studid)
                         ->where('syid', $syid)
-                        ->where('semid', $semid)
                         ->where('classid', $balForwardSetup->classid)
                         ->where('deleted', 0)
-                        ->where('particulars', 'LIKE', '%FORWARDED TO%')
-                        ->sum('payment');
+                        ->where('particulars', 'LIKE', '%FORWARDED TO%');
+
+                    if (!$ignoreSemidForPayments) {
+                        if (!is_null($paymentSemid)) {
+                            $forwardedBalanceQuery->where('semid', $paymentSemid);
+                        } else {
+                            $forwardedBalanceQuery->where(function ($q) {
+                                $q->whereNull('semid')->orWhere('semid', 0);
+                            });
+                        }
+                    }
+
+                    $forwardedBalance = $forwardedBalanceQuery->sum('payment');
 
                     // If a payment was made to forward this balance, don't show it as old account
                     if ($forwardedBalance > 0) {
@@ -15585,44 +16772,121 @@ class StudentAccountV2Controller extends Controller
                     foreach ($dueDates as $dueDate) {
                         $classid = $dueDate['classid'] ?? null;
                         $particulars = $dueDate['particulars'] ?? 'Fee Item';
+                        $isBookEntry = !empty($dueDate['is_book_entry']);
+                        $bookEntryId = $dueDate['itemid'] ?? null;
+                        $bookClassId = $dueDate['book_classid'] ?? null;
+                        $itemManagementId = $dueDate['item_management_id'] ?? null;
+                        $isItemManagement = !empty($dueDate['is_item_management']) || !empty($itemManagementId);
+                        $groupKey = $classid;
+                        $groupClassId = $classid;
+                        $itemId = null;
 
-                        if (!isset($groupedFees[$classid])) {
-                            $groupedFees[$classid] = [
+                        if ($isBookEntry && $bookEntryId) {
+                            $groupKey = 'book_' . $bookEntryId;
+                            $groupClassId = $bookClassId ?: $classid;
+                            $itemId = $bookEntryId;
+                        } elseif ($isItemManagement && $itemManagementId) {
+                            $groupKey = 'im_' . $itemManagementId;
+                            $groupClassId = $classid;
+                            $itemId = $dueDate['itemid'] ?? null;
+                        }
+
+                        if (!isset($groupedFees[$groupKey])) {
+                            $groupedFees[$groupKey] = [
                                 'description' => $particulars,
                                 'amount' => 0,
                                 'paid' => 0,
                                 'balance' => 0,
-                                'classid' => $classid,
+                                'classid' => $groupClassId,
+                                'itemid' => $itemId,
+                                'item_management_id' => $itemManagementId,
+                                'is_item_management' => $isItemManagement,
+                                'is_book_entry' => $isBookEntry,
                                 'is_adjustment' => $dueDate['is_standalone_adjustment'] ?? false,
                                 'is_discount' => false,
                             ];
                         }
 
                         // Accumulate full scheduled amount (even if already paid)
-                        $groupedFees[$classid]['amount'] += round($dueDate['amount'] ?? 0, 2);
+                        $groupedFees[$groupKey]['amount'] += round($dueDate['amount'] ?? 0, 2);
                     }
 
                     // Calculate payments for old accounts directly from chrngcashtrans
-                    // Old account payments are identified by paymentsetupdetail_id IS NULL
-                    // and must match the specific syid/semid for this old account term
-                    // Note: Old account payments may be in transactions with different syid/semid in chrngtrans,
-                    // but chrngcashtrans has the correct syid/semid for the old account term
-                    foreach ($groupedFees as $classid => &$fee) {
+                    // Include both scheduled and unscheduled payments tied to this term.
+                    // Older terms can still have paymentsetupdetail_id values from when they were current.
+                    foreach ($groupedFees as $groupKey => &$fee) {
+                        $classid = $fee['classid'] ?? null;
+
+                        if (!empty($fee['is_book_entry']) && !empty($fee['itemid'])) {
+                            $oldAccountPayment = DB::table('chrngtransitems as cti')
+                                ->join('chrngtrans as ct', 'ct.id', '=', 'cti.chrngtransid')
+                                ->where('cti.studid', $studid)
+                                ->where('cti.classid', $classid)
+                                ->where('cti.itemid', $fee['itemid'])
+                                ->where('cti.deleted', 0)
+                                ->where('ct.cancelled', 0)
+                                ->where('cti.syid', $syid)
+                                ->when(!$ignoreSemidForPayments && !is_null($paymentSemid), function ($q) use ($paymentSemid) {
+                                    $q->where('cti.semid', $paymentSemid);
+                                }, function ($q) use ($ignoreSemidForPayments) {
+                                    if (!$ignoreSemidForPayments) {
+                                        $q->where(function ($subQ) {
+                                            $subQ->whereNull('cti.semid')->orWhere('cti.semid', 0);
+                                        });
+                                    }
+                                })
+                                ->sum('cti.amount');
+
+                            $fee['paid'] = round((float) $oldAccountPayment, 2);
+                            $fee['balance'] = round(max(0, $fee['amount'] - $fee['paid']), 2);
+                            continue;
+                        }
+
+                        if (!empty($fee['item_management_id'])) {
+                            $oldAccountPaymentQuery = DB::table('chrngcashtrans as cct')
+                                ->join('chrngtrans as ct', 'cct.transno', '=', 'ct.transno')
+                                ->where('cct.studid', $studid)
+                                ->where('ct.studid', $studid)
+                                ->where('cct.syid', $syid)
+                                ->where('cct.classid', $classid)
+                                ->where('cct.item_management_id', $fee['item_management_id'])
+                                ->where('cct.deleted', 0)
+                                ->where('ct.cancelled', 0);
+
+                            if (!$ignoreSemidForPayments) {
+                                if (!is_null($paymentSemid)) {
+                                    $oldAccountPaymentQuery->where('cct.semid', $paymentSemid);
+                                } else {
+                                    $oldAccountPaymentQuery->where(function ($q) {
+                                        $q->whereNull('cct.semid')->orWhere('cct.semid', 0);
+                                    });
+                                }
+                            }
+
+                            $oldAccountPayment = $oldAccountPaymentQuery->sum('cct.amount');
+                            $fee['paid'] = round((float) $oldAccountPayment, 2);
+                            $fee['balance'] = round(max(0, $fee['amount'] - $fee['paid']), 2);
+                            continue;
+                        }
+
                         $oldAccountPaymentQuery = DB::table('chrngcashtrans as cct')
                             ->join('chrngtrans as ct', 'cct.transno', '=', 'ct.transno')
                             ->where('cct.studid', $studid)
                             ->where('ct.studid', $studid)
                             ->where('cct.syid', $syid)
                             ->where('cct.classid', $classid)
-                            ->whereNull('cct.paymentsetupdetail_id') // Old accounts don't have payment schedules
                             ->where('cct.deleted', 0)
                             ->where('ct.cancelled', 0);
 
-                        // Handle semid filter - if semid is provided, match it; otherwise allow NULL
-                        if (!is_null($semid)) {
-                            $oldAccountPaymentQuery->where('cct.semid', $semid);
-                        } else {
-                            $oldAccountPaymentQuery->whereNull('cct.semid');
+                        // Handle semid filter - if semid is provided, match it; otherwise allow NULL or 0
+                        if (!$ignoreSemidForPayments) {
+                            if (!is_null($paymentSemid)) {
+                                $oldAccountPaymentQuery->where('cct.semid', $paymentSemid);
+                            } else {
+                                $oldAccountPaymentQuery->where(function ($q) {
+                                    $q->whereNull('cct.semid')->orWhere('cct.semid', 0);
+                                });
+                            }
                         }
 
                         $oldAccountPayment = $oldAccountPaymentQuery->sum('cct.amount');
@@ -15670,30 +16934,44 @@ class StudentAccountV2Controller extends Controller
 
                     // Apply transaction-level overpayments (amountpaid minus recorded cashtrans) to remaining balances
                     $overpaymentTotal = 0;
-                    $transactions = DB::table('chrngtrans as ct')
+                    $transactionsQuery = DB::table('chrngtrans as ct')
                         ->where('ct.studid', $studid)
                         ->where('ct.syid', $syid)
                         ->where('ct.cancelled', 0)
-                        ->when(!is_null($semid), function ($q) use ($semid) {
-                            $q->where('ct.semid', $semid);
-                        }, function ($q) {
-                            $q->whereNull('ct.semid');
-                        })
                         ->select('ct.transno', 'ct.amountpaid', 'ct.change_amount')
-                        ->get();
+                        ;
+
+                    if (!$ignoreSemidForPayments) {
+                        $transactionsQuery->when(!is_null($paymentSemid), function ($q) use ($paymentSemid) {
+                            $q->where('ct.semid', $paymentSemid);
+                        }, function ($q) {
+                            $q->where(function ($subQ) {
+                                $subQ->whereNull('ct.semid')->orWhere('ct.semid', 0);
+                            });
+                        });
+                    }
+
+                    $transactions = $transactionsQuery->get();
 
                     foreach ($transactions as $txn) {
-                        $cashTransTotal = DB::table('chrngcashtrans')
+                        $cashTransTotalQuery = DB::table('chrngcashtrans')
                             ->where('transno', $txn->transno)
                             ->where('studid', $studid)
                             ->where('syid', $syid)
-                            ->when(!is_null($semid), function ($q) use ($semid) {
-                                $q->where('semid', $semid);
-                            }, function ($q) {
-                                $q->whereNull('semid');
-                            })
                             ->where('deleted', 0)
-                            ->sum('amount');
+                            ;
+
+                        if (!$ignoreSemidForPayments) {
+                            $cashTransTotalQuery->when(!is_null($paymentSemid), function ($q) use ($paymentSemid) {
+                                $q->where('semid', $paymentSemid);
+                            }, function ($q) {
+                                $q->where(function ($subQ) {
+                                    $subQ->whereNull('semid')->orWhere('semid', 0);
+                                });
+                            });
+                        }
+
+                        $cashTransTotal = $cashTransTotalQuery->sum('amount');
 
                         $amountPaid = (float) ($txn->amountpaid ?? 0);
                         $changeAmt = (float) ($txn->change_amount ?? 0);
@@ -15783,8 +17061,13 @@ class StudentAccountV2Controller extends Controller
                                 'ti.id as tuitionitem_id',
                                 'ti.itemid',
                                 'i.description as item_description',
-                                'ti.amount as item_amount'
+                                'ti.amount as item_amount',
+                                'ti.payment_priority_sequence',
+                                'ti.createddatetime'
                             ])
+                            ->orderBy('td.classificationid', 'asc')
+                            ->orderByRaw('CASE WHEN ti.payment_priority_sequence IS NULL OR ti.payment_priority_sequence < 1 THEN 9999 ELSE ti.payment_priority_sequence END asc')
+                            ->orderBy('ti.createddatetime', 'asc')
                             ->get();
 
                         // Group tuition items by classid
@@ -15797,16 +17080,21 @@ class StudentAccountV2Controller extends Controller
                                     'itemid' => $row->itemid,
                                     'description' => $row->item_description ?? 'Unknown Item',
                                     'amount' => round((float) $row->item_amount, 2),
+                                    'payment_priority_sequence' => ((int) ($row->payment_priority_sequence ?? 0)) > 0
+                                        ? (int) $row->payment_priority_sequence
+                                        : 9999,
+                                    'createddatetime' => $row->createddatetime ?? null,
                                 ];
                             }
                         }
                     }
 
                     // Convert grouped fees to breakdown items and add tuition items
-                    foreach ($groupedFees as $classid => $fee) {
+                    foreach ($groupedFees as $groupKey => $fee) {
+                        $classid = $fee['classid'] ?? null;
                         // Add tuition items if available for this classid
                         $items = [];
-                        if (isset($tuitionItemsByClassId[$classid])) {
+                        if (empty($fee['is_book_entry']) && empty($fee['item_management_id']) && isset($tuitionItemsByClassId[$classid])) {
                             // Calculate total original amount of all nested items for this classid
                             $totalNestedItemsAmount = 0;
                             foreach ($tuitionItemsByClassId[$classid] as $item) {
@@ -15832,13 +17120,20 @@ class StudentAccountV2Controller extends Controller
                                     })
                                     ->where('ct.studid', $studid)
                                     ->where('cct.syid', $syid)
-                                    ->where('cct.semid', $semid)
                                     ->where('cct.classid', $classid)
                                     ->where('cti.itemid', $item['itemid'])
                                     ->where('ct.cancelled', 0)
                                     ->where('cct.deleted', 0)
                                     ->where('cti.deleted', 0)
-                                    ->whereNull('cct.paymentsetupdetail_id') // Old accounts don't have payment schedules
+                                    ->when(!$ignoreSemidForPayments && !is_null($paymentSemid), function ($q) use ($paymentSemid) {
+                                        $q->where('cct.semid', $paymentSemid);
+                                    }, function ($q) use ($ignoreSemidForPayments) {
+                                        if (!$ignoreSemidForPayments) {
+                                            $q->where(function ($subQ) {
+                                                $subQ->whereNull('cct.semid')->orWhere('cct.semid', 0);
+                                            });
+                                        }
+                                    })
                                     ->sum('cti.amount');
 
                                 // Calculate the remaining portion of this item based on the proportion
@@ -16138,6 +17433,7 @@ class StudentAccountV2Controller extends Controller
                 'a.amount',
                 'a.mop',
                 'a.id as adjustment_id',
+                'ad.id as adjustmentdetail_id',
                 'a.createddatetime as transaction_date',
                 'u.name as created_by',
                 'a.adjstatus',
@@ -16173,6 +17469,33 @@ class StudentAccountV2Controller extends Controller
             $totalPaid = (float) ($payments ?? 0);
             $amount = (float) $adj->amount;
             $balance = max(0, $amount - $totalPaid);
+            $adjustmentItems = [];
+
+            if (!empty($adj->adjustmentdetail_id)) {
+                $adjustmentItemsRaw = DB::table('adjustmentitems as ai')
+                    ->join('items as i', 'ai.itemid', '=', 'i.id')
+                    ->select('ai.itemid', 'i.description as particulars', 'ai.amount')
+                    ->where('ai.detailid', $adj->adjustmentdetail_id)
+                    ->where('ai.deleted', 0)
+                    ->where('ai.amount', '>', 0)
+                    ->orderBy('ai.id', 'asc')
+                    ->get();
+
+                $remainingPaid = $totalPaid;
+                foreach ($adjustmentItemsRaw as $adjItem) {
+                    $itemAmount = (float) $adjItem->amount;
+                    $itemPaid = min($itemAmount, max(0, $remainingPaid));
+                    $remainingPaid = max(0, $remainingPaid - $itemPaid);
+
+                    $adjustmentItems[] = [
+                        'itemid' => $adjItem->itemid,
+                        'particulars' => $adjItem->particulars,
+                        'amount' => round($itemAmount, 2),
+                        'payment' => round($itemPaid, 2),
+                        'balance' => round(max(0, $itemAmount - $itemPaid), 2),
+                    ];
+                }
+            }
 
             // If adjustment has payment schedule (mop), add breakdown entries
             if ($adj->mop) {
@@ -16221,12 +17544,14 @@ class StudentAccountV2Controller extends Controller
                         'paid' => round($totalPaid, 2),
                         'balance' => round($balance, 2),
                         'adjustment_id' => $adj->adjustment_id,
+                        'adjustmentdetail_id' => $adj->adjustmentdetail_id,
                         'transaction_date' => $adj->transaction_date,
                         'created_by' => $adj->created_by,
                         'adjstatus' => $adj->adjstatus,
                         'is_voided' => $adj->is_voided,
                         'mop' => $adj->mop,
-                        'items' => $breakdownItems
+                        'items' => $breakdownItems,
+                        'adjustment_items' => $adjustmentItems
                     ];
                 } else {
                     // No payment schedule found, add as single entry
@@ -16237,12 +17562,14 @@ class StudentAccountV2Controller extends Controller
                         'paid' => round($totalPaid, 2),
                         'balance' => round($balance, 2),
                         'adjustment_id' => $adj->adjustment_id,
+                        'adjustmentdetail_id' => $adj->adjustmentdetail_id,
                         'transaction_date' => $adj->transaction_date,
                         'created_by' => $adj->created_by,
                         'adjstatus' => $adj->adjstatus,
                         'is_voided' => $adj->is_voided,
                         'mop' => $adj->mop,
-                        'items' => []
+                        'items' => [],
+                        'adjustment_items' => $adjustmentItems
                     ];
                 }
             } else {
@@ -16254,12 +17581,14 @@ class StudentAccountV2Controller extends Controller
                     'paid' => round($totalPaid, 2),
                     'balance' => round($balance, 2),
                     'adjustment_id' => $adj->adjustment_id,
+                    'adjustmentdetail_id' => $adj->adjustmentdetail_id,
                     'transaction_date' => $adj->transaction_date,
                     'created_by' => $adj->created_by,
                     'adjstatus' => $adj->adjstatus,
                     'is_voided' => $adj->is_voided,
                     'mop' => $adj->mop,
-                    'items' => []
+                    'items' => [],
+                    'adjustment_items' => $adjustmentItems
                 ];
             }
         }
