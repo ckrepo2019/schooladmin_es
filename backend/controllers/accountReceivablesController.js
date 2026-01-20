@@ -17,6 +17,68 @@ const getSchoolConnection = async (schoolDbConfig) => {
 
 const toNumber = (value) => Number(value) || 0;
 
+/**
+ * Format date to YYYY-MM-DD string
+ */
+const formatDateToString = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+/**
+ * Get date range from shortcut filter
+ * Shortcuts: '30days', '60days', '90days', '1year', 'custom'
+ * For custom, startDate and endDate should be provided
+ */
+const getDateRangeFromFilter = (dateFilter, startDate, endDate) => {
+  if (!dateFilter && !startDate && !endDate) {
+    return { dateFrom: null, dateTo: null };
+  }
+
+  const today = new Date();
+  let dateFrom = null;
+  let dateTo = formatDateToString(today);
+
+  switch (dateFilter) {
+    case '30days':
+      dateFrom = new Date(today);
+      dateFrom.setDate(dateFrom.getDate() - 30);
+      dateFrom = formatDateToString(dateFrom);
+      break;
+    case '60days':
+      dateFrom = new Date(today);
+      dateFrom.setDate(dateFrom.getDate() - 60);
+      dateFrom = formatDateToString(dateFrom);
+      break;
+    case '90days':
+      dateFrom = new Date(today);
+      dateFrom.setDate(dateFrom.getDate() - 90);
+      dateFrom = formatDateToString(dateFrom);
+      break;
+    case '1year':
+      dateFrom = new Date(today);
+      dateFrom.setFullYear(dateFrom.getFullYear() - 1);
+      dateFrom = formatDateToString(dateFrom);
+      break;
+    case 'custom':
+      // Use provided startDate and endDate
+      dateFrom = startDate || null;
+      dateTo = endDate || formatDateToString(today);
+      break;
+    default:
+      // If no shortcut but dates provided, use them directly
+      if (startDate || endDate) {
+        dateFrom = startDate || null;
+        dateTo = endDate || formatDateToString(today);
+      }
+      break;
+  }
+
+  return { dateFrom, dateTo };
+};
+
 // ============================================================================
 // FINANCE V1 STUDLEDGER-BASED CALCULATION
 // Based on StatementofAccountController.php logic
@@ -26,8 +88,10 @@ const toNumber = (value) => Number(value) || 0;
  * Calculate student totals directly from studledger table (finance_v1 approach)
  * This mirrors the PHP StatementofAccountController.php logic where:
  * - balance = SUM(amount) - SUM(payment) from studledger where void=0 and deleted=0
+ *
+ * @param {object} dateRange - Optional { dateFrom, dateTo } for filtering by createddatetime
  */
-const calculateStudentTotalsFromLedger = async (db, student, syid, semid, schoolInfo) => {
+const calculateStudentTotalsFromLedger = async (db, student, syid, semid, schoolInfo, dateRange = {}) => {
   if (!syid) {
     return {
       total_fees: 0,
@@ -62,6 +126,17 @@ const calculateStudentTotalsFromLedger = async (db, student, syid, semid, school
       }
     }
     // For basic education (levelid 1-13), no semester filter needed
+
+    // Apply date range filter (matches PHP: filter by createddatetime)
+    const { dateFrom, dateTo } = dateRange;
+    if (dateFrom) {
+      query += ' AND DATE(createddatetime) >= ?';
+      params.push(dateFrom);
+    }
+    if (dateTo) {
+      query += ' AND DATE(createddatetime) <= ?';
+      params.push(dateTo);
+    }
 
     const [rows] = await db.execute(query, params);
     const totalAmount = toNumber(rows[0]?.total_amount);
@@ -475,7 +550,10 @@ const fetchStudentPayments = async (db, student, syid, semid, balClassId) => {
   return payments + oldPayments + creditAdjustments;
 };
 
-const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balClassId, useStudledger = false) => {
+/**
+ * @param {object} dateRange - Optional { dateFrom, dateTo } for filtering by createddatetime
+ */
+const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balClassId, useStudledger = false, dateRange = {}) => {
   if (!syid) {
     return {
       total_fees: 0,
@@ -490,7 +568,7 @@ const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balC
   if (useStudledger) {
     const hasLedger = await hasStudledgerEntries(db, student.id, syid);
     if (hasLedger) {
-      return calculateStudentTotalsFromLedger(db, student, syid, semid, schoolInfo);
+      return calculateStudentTotalsFromLedger(db, student, syid, semid, schoolInfo, dateRange);
     }
   }
 
@@ -705,7 +783,7 @@ const fetchStudents = async (db, { syid, semid, programId, levelId, search }) =>
 };
 
 const buildSyComparison = async (db, options) => {
-  const { programId, levelId, semid, schoolInfo, balClassId, useStudledger = false } = options;
+  const { programId, levelId, semid, schoolInfo, balClassId, useStudledger = false, dateRange = {} } = options;
   const schoolYears = await getSchoolYears(db, 4);
   const comparison = [];
 
@@ -729,7 +807,8 @@ const buildSyComparison = async (db, options) => {
         semid,
         schoolInfo,
         balClassId,
-        useStudledger
+        useStudledger,
+        dateRange
       );
 
       if (Number(totals.total_fees) <= 0) {
@@ -787,6 +866,14 @@ export const getAccountReceivableFilters = async (req, res) => {
   }
 };
 
+/**
+ * Get Account Receivables detailed list
+ *
+ * Date filter options:
+ * - dateFilter: '30days', '60days', '90days', '1year', 'custom'
+ * - startDate: YYYY-MM-DD (used when dateFilter is 'custom' or not specified)
+ * - endDate: YYYY-MM-DD (used when dateFilter is 'custom' or not specified)
+ */
 export const getAccountReceivableList = async (req, res) => {
   try {
     const {
@@ -796,6 +883,9 @@ export const getAccountReceivableList = async (req, res) => {
       programId,
       levelId,
       search,
+      dateFilter,
+      startDate,
+      endDate,
       page = 1,
       perPage = 200,
       useStudledger = false, // Finance V1 flag to use studledger-based calculation
@@ -807,6 +897,9 @@ export const getAccountReceivableList = async (req, res) => {
         message: 'School database configuration is required',
       });
     }
+
+    // Process date range filter
+    const dateRange = getDateRangeFromFilter(dateFilter, startDate, endDate);
 
     const db = await getSchoolConnection(schoolDbConfig);
     const schoolInfo = await getSchoolInfo(db);
@@ -836,7 +929,8 @@ export const getAccountReceivableList = async (req, res) => {
         semid,
         schoolInfo,
         balClassId,
-        useStudledger
+        useStudledger,
+        dateRange
       );
 
       if (Number(totals.total_fees) <= 0) {
@@ -860,6 +954,7 @@ export const getAccountReceivableList = async (req, res) => {
         page: Number(page),
         per_page: Number(perPage),
         pages: Math.ceil(studentsWithTotals.length / Math.max(1, Number(perPage))),
+        appliedDateRange: dateRange,
       },
     });
   } catch (error) {
@@ -872,6 +967,14 @@ export const getAccountReceivableList = async (req, res) => {
   }
 };
 
+/**
+ * Get Account Receivables summary statistics
+ *
+ * Date filter options:
+ * - dateFilter: '30days', '60days', '90days', '1year', 'custom'
+ * - startDate: YYYY-MM-DD (used when dateFilter is 'custom' or not specified)
+ * - endDate: YYYY-MM-DD (used when dateFilter is 'custom' or not specified)
+ */
 export const getAccountReceivableSummary = async (req, res) => {
   try {
     const {
@@ -881,6 +984,9 @@ export const getAccountReceivableSummary = async (req, res) => {
       programId,
       levelId,
       search,
+      dateFilter,
+      startDate,
+      endDate,
       useStudledger = false, // Finance V1 flag to use studledger-based calculation
     } = req.body;
 
@@ -890,6 +996,9 @@ export const getAccountReceivableSummary = async (req, res) => {
         message: 'School database configuration is required',
       });
     }
+
+    // Process date range filter
+    const dateRange = getDateRangeFromFilter(dateFilter, startDate, endDate);
 
     const db = await getSchoolConnection(schoolDbConfig);
     const schoolInfo = await getSchoolInfo(db);
@@ -910,6 +1019,7 @@ export const getAccountReceivableSummary = async (req, res) => {
       schoolInfo,
       balClassId,
       useStudledger,
+      dateRange,
     });
 
     if (!students.length) {
@@ -929,6 +1039,7 @@ export const getAccountReceivableSummary = async (req, res) => {
           byGradeLevel: [],
           balanceTiers: [],
           bySchoolYear,
+          appliedDateRange: dateRange,
         },
       });
     }
@@ -942,7 +1053,8 @@ export const getAccountReceivableSummary = async (req, res) => {
         semid,
         schoolInfo,
         balClassId,
-        useStudledger
+        useStudledger,
+        dateRange
       );
       studentsWithTotals.push({
         ...student,
@@ -952,6 +1064,7 @@ export const getAccountReceivableSummary = async (req, res) => {
 
     const summaryData = buildSummary(studentsWithTotals);
     summaryData.bySchoolYear = bySchoolYear;
+    summaryData.appliedDateRange = dateRange;
     await db.end();
 
     res.status(200).json({

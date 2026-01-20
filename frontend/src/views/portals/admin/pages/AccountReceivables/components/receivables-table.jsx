@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   flexRender,
   getCoreRowModel,
@@ -25,7 +25,155 @@ import { receivableColumns } from './receivables-columns';
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(Number(value) || 0);
 
-export function ReceivablesTable({ data, loading }) {
+export function ReceivablesTable({ data, loading, isFinanceV1 = false }) {
+  if (isFinanceV1) {
+    return <ReceivablesTableV1 data={data} loading={loading} />;
+  }
+
+  return <ReceivablesTableV2 data={data} loading={loading} />;
+}
+
+function ReceivablesTableV1({ data, loading }) {
+  const [search, setSearch] = useState('');
+
+  const rows = Array.isArray(data) ? data : [];
+  const normalizedSearch = search.trim().toLowerCase();
+
+  const filteredRows = useMemo(() => {
+    if (!normalizedSearch) {
+      return rows;
+    }
+
+    return rows.filter((row) => {
+      const haystack = [
+        row.full_name,
+        row.name,
+        row.sid,
+        row.level_name,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(normalizedSearch);
+    });
+  }, [rows, normalizedSearch]);
+
+  const totals = useMemo(() => {
+    return filteredRows.reduce(
+      (acc, row) => {
+        acc.totalAssessment += Number(row.total_fees || 0);
+        acc.totalDiscount += Number(row.discount || 0);
+        acc.totalNetAssessed += Number(row.net_assessed || 0);
+        acc.totalPayment += Number(row.total_paid || 0);
+        acc.totalBalance += Number(row.balance || 0);
+        return acc;
+      },
+      {
+        totalAssessment: 0,
+        totalDiscount: 0,
+        totalNetAssessed: 0,
+        totalPayment: 0,
+        totalBalance: 0,
+      }
+    );
+  }, [filteredRows]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2"></div>
+          <p className="text-sm text-muted-foreground">Loading receivables...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-end">
+        <div className="relative w-[220px]">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+      </div>
+
+      <div className="rounded-md border bg-background">
+        <div className="h-[520px] overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="text-xs font-semibold text-muted-foreground">
+                <TableHead className="w-[50px] text-center">#</TableHead>
+                <TableHead className="w-[120px] text-center">ID</TableHead>
+                <TableHead>Student Name</TableHead>
+                <TableHead className="w-[120px] text-center">Level</TableHead>
+                <TableHead className="w-[80px] text-center">Units</TableHead>
+                <TableHead className="w-[140px] text-right">Total Assessment</TableHead>
+                <TableHead className="w-[120px] text-right">Discount</TableHead>
+                <TableHead className="w-[140px] text-right">Net Assessed</TableHead>
+                <TableHead className="w-[140px] text-right">Total Payment</TableHead>
+                <TableHead className="w-[120px] text-right">Balance</TableHead>
+              </TableRow>
+              <TableRow className="bg-muted/30 text-xs font-semibold">
+                <TableHead colSpan={5} className="text-right">
+                  TOTAL
+                </TableHead>
+                <TableHead className="text-right">
+                  {formatCurrency(totals.totalAssessment)}
+                </TableHead>
+                <TableHead className="text-right">
+                  {formatCurrency(totals.totalDiscount)}
+                </TableHead>
+                <TableHead className="text-right">
+                  {formatCurrency(totals.totalNetAssessed)}
+                </TableHead>
+                <TableHead className="text-right">
+                  {formatCurrency(totals.totalPayment)}
+                </TableHead>
+                <TableHead className="text-right">
+                  {formatCurrency(totals.totalBalance)}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredRows.length ? (
+                filteredRows.map((row, index) => (
+                  <TableRow key={`${row.id}-${row.sid || index}`} className="text-xs">
+                    <TableCell className="text-center">{index + 1}</TableCell>
+                    <TableCell className="text-center">{row.sid || '-'}</TableCell>
+                    <TableCell className="font-medium">
+                      {row.full_name || row.name || row.sid || 'Unknown'}
+                    </TableCell>
+                    <TableCell className="text-center">{row.level_name || '-'}</TableCell>
+                    <TableCell className="text-center">{row.units ?? ''}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(row.total_fees)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(row.discount)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(row.net_assessed)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(row.total_paid)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(row.balance)}</TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
+                    No students found
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReceivablesTableV2({ data, loading }) {
   const [columnVisibility, setColumnVisibility] = useState({});
   const [columnFilters, setColumnFilters] = useState([]);
   const [sorting, setSorting] = useState([{ id: 'balance', desc: true }]);

@@ -5,9 +5,20 @@ import { Card, CardContent } from '../../../../../components/ui/card';
 import { Button } from '../../../../../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../../../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../../../components/ui/tabs';
-import { RefreshCcw, Download } from 'lucide-react';
+import { Input } from '../../../../../components/ui/input';
+import { RefreshCcw, Download, Calendar } from 'lucide-react';
 import { ReceivablesStats } from './components/receivables-stats';
 import { ReceivablesTable } from './components/receivables-table';
+
+// Date filter shortcut options
+const DATE_FILTER_OPTIONS = [
+  { value: 'all', label: 'All Time' },
+  { value: '30days', label: 'Last 30 Days' },
+  { value: '60days', label: 'Last 60 Days' },
+  { value: '90days', label: 'Last 90 Days' },
+  { value: '1year', label: 'Last Year' },
+  { value: 'custom', label: 'Custom Range' },
+];
 
 const PER_PAGE = 200;
 
@@ -16,6 +27,9 @@ export default function AccountReceivables() {
   const [receivables, setReceivables] = useState([]);
   const [programs, setPrograms] = useState([]);
   const [gradeLevels, setGradeLevels] = useState([]);
+  const [sections, setSections] = useState([]);
+  const [grantees, setGrantees] = useState([]);
+  const [modes, setModes] = useState([]);
   const [schoolYears, setSchoolYears] = useState([]);
   const [semesters, setSemesters] = useState([]);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -25,6 +39,12 @@ export default function AccountReceivables() {
   const [selectedSem, setSelectedSem] = useState('');
   const [selectedProgram, setSelectedProgram] = useState('all');
   const [selectedLevel, setSelectedLevel] = useState('all');
+  const [selectedSection, setSelectedSection] = useState('all');
+  const [selectedGrantee, setSelectedGrantee] = useState('all');
+  const [selectedMode, setSelectedMode] = useState('all');
+  const [dateFilter, setDateFilter] = useState('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const summaryAbortRef = useRef(null);
   const listAbortRef = useRef(null);
@@ -60,6 +80,12 @@ export default function AccountReceivables() {
   useEffect(() => {
     if (!selectedSy || !selectedSem) return;
 
+    if (isFinanceV1) {
+      if ((startDate && !endDate) || (!startDate && endDate)) return;
+    } else if (dateFilter === 'custom' && (!startDate || !endDate)) {
+      return;
+    }
+
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
     }
@@ -74,7 +100,19 @@ export default function AccountReceivables() {
         clearTimeout(debounceRef.current);
       }
     };
-  }, [selectedSy, selectedSem, selectedProgram, selectedLevel]);
+  }, [
+    isFinanceV1,
+    selectedSy,
+    selectedSem,
+    selectedProgram,
+    selectedLevel,
+    selectedSection,
+    selectedGrantee,
+    selectedMode,
+    dateFilter,
+    startDate,
+    endDate,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -91,13 +129,14 @@ export default function AccountReceivables() {
   }, []);
 
   useEffect(() => {
+    if (isFinanceV1) return;
     if (selectedProgram === 'all') return;
     const programId = Number(selectedProgram);
     const validLevels = gradeLevels.filter((level) => Number(level.acadprogid) === programId);
     if (selectedLevel !== 'all' && !validLevels.some((level) => `${level.id}` === selectedLevel)) {
       setSelectedLevel('all');
     }
-  }, [selectedProgram, gradeLevels, selectedLevel]);
+  }, [isFinanceV1, selectedProgram, gradeLevels, selectedLevel]);
 
   const fetchSchoolYears = async () => {
     try {
@@ -169,10 +208,74 @@ export default function AccountReceivables() {
       if (response.ok && result.status === 'success') {
         setPrograms(result.data.programs || []);
         setGradeLevels(result.data.gradeLevels || []);
+        setGrantees(result.data.grantees || []);
+        setModes(result.data.modes || []);
       }
     } catch (error) {
       console.error('Error fetching receivable filters:', error);
     }
+  };
+
+  const fetchSectionsByLevel = async (levelId) => {
+    try {
+      const response = await fetch(apiUrl(`${API_BASE}/receivables/sections`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: 'include',
+        body: JSON.stringify({ schoolDbConfig, levelId }),
+      });
+
+      const result = await response.json();
+      if (response.ok && result.status === 'success') {
+        setSections(result.data || []);
+      } else {
+        setSections([]);
+      }
+    } catch (error) {
+      console.error('Error fetching receivable sections:', error);
+      setSections([]);
+    }
+  };
+
+  useEffect(() => {
+    if (!isFinanceV1) return;
+
+    if (!selectedLevel || selectedLevel === 'all') {
+      setSections([]);
+      setSelectedSection('all');
+      return;
+    }
+
+    setSelectedSection('all');
+    fetchSectionsByLevel(selectedLevel);
+  }, [isFinanceV1, selectedLevel]);
+
+  const buildReceivablePayload = (extra = {}) => {
+    const payload = {
+      schoolDbConfig,
+      syid: selectedSy,
+      semid: selectedSem,
+      programId: selectedProgram === 'all' ? null : selectedProgram,
+      levelId: selectedLevel === 'all' ? null : selectedLevel,
+    };
+
+    if (isFinanceV1) {
+      payload.sectionId = selectedSection === 'all' ? null : selectedSection;
+      payload.granteeId = selectedGrantee === 'all' ? null : selectedGrantee;
+      payload.modeId = selectedMode === 'all' ? null : selectedMode;
+      payload.dateFilter = null;
+      payload.startDate = startDate || null;
+      payload.endDate = endDate || null;
+    } else {
+      payload.dateFilter = dateFilter === 'all' ? null : dateFilter;
+      payload.startDate = dateFilter === 'custom' ? startDate : null;
+      payload.endDate = dateFilter === 'custom' ? endDate : null;
+    }
+
+    return { ...payload, ...extra };
   };
 
   const fetchReceivablesSummary = async () => {
@@ -192,13 +295,7 @@ export default function AccountReceivables() {
         },
         credentials: 'include',
         signal: controller.signal,
-        body: JSON.stringify({
-          schoolDbConfig,
-          syid: selectedSy,
-          semid: selectedSem,
-          programId: selectedProgram === 'all' ? null : selectedProgram,
-          levelId: selectedLevel === 'all' ? null : selectedLevel,
-        }),
+        body: JSON.stringify(buildReceivablePayload()),
       });
 
       const result = await response.json();
@@ -236,15 +333,12 @@ export default function AccountReceivables() {
         },
         credentials: 'include',
         signal: controller.signal,
-        body: JSON.stringify({
-          schoolDbConfig,
-          syid: selectedSy,
-          semid: selectedSem,
-          programId: selectedProgram === 'all' ? null : selectedProgram,
-          levelId: selectedLevel === 'all' ? null : selectedLevel,
-          page: 1,
-          perPage: PER_PAGE,
-        }),
+        body: JSON.stringify(
+          buildReceivablePayload({
+            page: 1,
+            perPage: isFinanceV1 ? 0 : PER_PAGE,
+          })
+        ),
       });
 
       const result = await response.json();
@@ -291,9 +385,28 @@ export default function AccountReceivables() {
     toast.success('Data exported successfully');
   };
 
+  const handleGenerate = () => {
+    if (!selectedSy || !selectedSem) {
+      toast.error('Select school year and semester');
+      return;
+    }
+
+    if ((startDate && !endDate) || (!startDate && endDate)) {
+      toast.error('Select both start and end dates');
+      return;
+    }
+
+    fetchReceivablesSummary();
+    fetchReceivablesList();
+  };
+
   const handleRefresh = () => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
+    }
+    if (isFinanceV1) {
+      handleGenerate();
+      return;
     }
     fetchReceivablesSummary();
     fetchReceivablesList();
@@ -316,11 +429,12 @@ export default function AccountReceivables() {
     });
   };
 
-  const filteredLevels = sortGradeLevels(
-    selectedProgram === 'all'
-      ? gradeLevels
-      : gradeLevels.filter((level) => `${level.acadprogid}` === selectedProgram)
-  );
+  const sortedLevels = sortGradeLevels(gradeLevels);
+  const filteredLevels = isFinanceV1
+    ? sortedLevels
+    : selectedProgram === 'all'
+      ? sortedLevels
+      : sortedLevels.filter((level) => `${level.acadprogid}` === selectedProgram);
 
   return (
     <div className="space-y-4 p-6">
@@ -345,94 +459,308 @@ export default function AccountReceivables() {
 
       <Card data-watermark="FILTER">
         <CardContent className="pt-6">
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="w-[200px]">
-                <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                  School Year
-                </label>
-                <Select value={selectedSy} onValueChange={setSelectedSy}>
-                  <SelectTrigger className="w-full h-9">
-                    <SelectValue placeholder="Select school year" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {schoolYears.length === 0 && (
-                      <SelectItem value="none" disabled>
-                        No school years
-                      </SelectItem>
-                    )}
-                    {schoolYears.map((sy) => (
-                      <SelectItem key={sy.id} value={sy.id.toString()}>
-                        {sy.sydesc}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+          {isFinanceV1 ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="w-[200px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    School Year
+                  </label>
+                  <Select value={selectedSy} onValueChange={setSelectedSy}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="Select school year" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {schoolYears.length === 0 && (
+                        <SelectItem value="none" disabled>
+                          No school years
+                        </SelectItem>
+                      )}
+                      {schoolYears.map((sy) => (
+                        <SelectItem key={sy.id} value={sy.id.toString()}>
+                          {sy.sydesc}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[260px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    Date Range
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="h-9"
+                    />
+                    <Input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="h-9"
+                    />
+                  </div>
+                </div>
+                <div className="w-[200px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    Department
+                  </label>
+                  <Select value={selectedProgram} onValueChange={setSelectedProgram}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="All departments" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      {programs.map((program) => (
+                        <SelectItem key={program.id} value={program.id.toString()}>
+                          {program.acadprogcode || program.progname}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[200px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    Grade Level
+                  </label>
+                  <Select value={selectedLevel} onValueChange={setSelectedLevel}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="All levels" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      {filteredLevels.map((level) => (
+                        <SelectItem key={level.id} value={level.id.toString()}>
+                          {level.levelname}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-              <div className="w-[200px]">
-                <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                  Semester
-                </label>
-                <Select value={selectedSem} onValueChange={setSelectedSem}>
-                  <SelectTrigger className="w-full h-9">
-                    <SelectValue placeholder="Select semester" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {semesters.length === 0 && (
-                      <SelectItem value="none" disabled>
-                        No semesters
-                      </SelectItem>
-                    )}
-                    {semesters.map((sem) => (
-                      <SelectItem key={sem.id} value={sem.id.toString()}>
-                        {sem.semester}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="w-[200px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    Semester
+                  </label>
+                  <Select value={selectedSem} onValueChange={setSelectedSem}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="Select semester" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {semesters.length === 0 && (
+                        <SelectItem value="none" disabled>
+                          No semesters
+                        </SelectItem>
+                      )}
+                      {semesters.map((sem) => (
+                        <SelectItem key={sem.id} value={sem.id.toString()}>
+                          {sem.semester}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[200px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    Sections
+                  </label>
+                  <Select value={selectedSection} onValueChange={setSelectedSection}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="All sections" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      {sections.map((section) => (
+                        <SelectItem key={section.id} value={section.id.toString()}>
+                          {section.sectionname}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[200px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    Grantee
+                  </label>
+                  <Select value={selectedGrantee} onValueChange={setSelectedGrantee}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="All grantees" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      {grantees.map((grantee) => (
+                        <SelectItem key={grantee.id} value={grantee.id.toString()}>
+                          {grantee.description}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[200px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    MOL
+                  </label>
+                  <Select value={selectedMode} onValueChange={setSelectedMode}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="All modes" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      {modes.map((mode) => (
+                        <SelectItem key={mode.id} value={mode.id.toString()}>
+                          {mode.description}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-              <div className="w-[220px]">
-                <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                  Academic Program
-                </label>
-                <Select value={selectedProgram} onValueChange={setSelectedProgram}>
-                  <SelectTrigger className="w-full h-9">
-                    <SelectValue placeholder="All programs" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All programs</SelectItem>
-                    {programs.map((program) => (
-                      <SelectItem key={program.id} value={program.id.toString()}>
-                        {program.progname}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+
+              <div className="flex items-center justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={handleExport} className="h-9">
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                </Button>
               </div>
-              <div className="w-[220px]">
-                <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                  Grade Level
-                </label>
-                <Select value={selectedLevel} onValueChange={setSelectedLevel}>
-                  <SelectTrigger className="w-full h-9">
-                    <SelectValue placeholder="All levels" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All levels</SelectItem>
-                    {filteredLevels.map((level) => (
-                      <SelectItem key={level.id} value={level.id.toString()}>
-                        {level.levelname}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button variant="outline" size="sm" onClick={handleExport} className="h-9">
-                <Download className="h-4 w-4 mr-2" />
-                Export
-              </Button>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="w-[200px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    School Year
+                  </label>
+                  <Select value={selectedSy} onValueChange={setSelectedSy}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="Select school year" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {schoolYears.length === 0 && (
+                        <SelectItem value="none" disabled>
+                          No school years
+                        </SelectItem>
+                      )}
+                      {schoolYears.map((sy) => (
+                        <SelectItem key={sy.id} value={sy.id.toString()}>
+                          {sy.sydesc}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[200px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    Semester
+                  </label>
+                  <Select value={selectedSem} onValueChange={setSelectedSem}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="Select semester" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {semesters.length === 0 && (
+                        <SelectItem value="none" disabled>
+                          No semesters
+                        </SelectItem>
+                      )}
+                      {semesters.map((sem) => (
+                        <SelectItem key={sem.id} value={sem.id.toString()}>
+                          {sem.semester}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[220px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    Academic Program
+                  </label>
+                  <Select value={selectedProgram} onValueChange={setSelectedProgram}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="All programs" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All programs</SelectItem>
+                      {programs.map((program) => (
+                        <SelectItem key={program.id} value={program.id.toString()}>
+                          {program.progname}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[220px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    Grade Level
+                  </label>
+                  <Select value={selectedLevel} onValueChange={setSelectedLevel}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="All levels" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All levels</SelectItem>
+                      {filteredLevels.map((level) => (
+                        <SelectItem key={level.id} value={level.id.toString()}>
+                          {level.levelname}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[160px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    <Calendar className="h-3 w-3 inline mr-1" />
+                    Date Filter
+                  </label>
+                  <Select value={dateFilter} onValueChange={setDateFilter}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="All Time" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DATE_FILTER_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {dateFilter === 'custom' && (
+                  <>
+                    <div className="w-[140px]">
+                      <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                        Start Date
+                      </label>
+                      <Input
+                        type="date"
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                        className="h-9"
+                      />
+                    </div>
+                    <div className="w-[140px]">
+                      <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                        End Date
+                      </label>
+                      <Input
+                        type="date"
+                        value={endDate}
+                        onChange={(e) => setEndDate(e.target.value)}
+                        className="h-9"
+                      />
+                    </div>
+                  </>
+                )}
+                <Button variant="outline" size="sm" onClick={handleExport} className="h-9">
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -458,7 +786,11 @@ export default function AccountReceivables() {
         <TabsContent value="receivables" className="space-y-4">
           <Card data-watermark="TABLE">
             <CardContent className="pt-6">
-              <ReceivablesTable data={receivables} loading={listLoading} />
+              <ReceivablesTable
+                data={receivables}
+                loading={listLoading}
+                isFinanceV1={isFinanceV1}
+              />
             </CardContent>
           </Card>
         </TabsContent>

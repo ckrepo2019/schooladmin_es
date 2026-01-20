@@ -27,20 +27,139 @@ const getSchoolConnection = async (schoolDbConfig) => {
  */
 const toNumber = (value) => Number(value) || 0;
 
+/**
+ * Format date to YYYY-MM-DD string
+ */
+const formatDateToString = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+/**
+ * Get date range from shortcut filter
+ * Shortcuts: '30days', '60days', '90days', '1year', 'custom'
+ * For custom, startDate and endDate should be provided
+ */
+const getDateRangeFromFilter = (dateFilter, startDate, endDate) => {
+  if (!dateFilter && !startDate && !endDate) {
+    return { dateFrom: null, dateTo: null };
+  }
+
+  const today = new Date();
+  let dateFrom = null;
+  let dateTo = formatDateToString(today);
+
+  switch (dateFilter) {
+    case '30days':
+      dateFrom = new Date(today);
+      dateFrom.setDate(dateFrom.getDate() - 30);
+      dateFrom = formatDateToString(dateFrom);
+      break;
+    case '60days':
+      dateFrom = new Date(today);
+      dateFrom.setDate(dateFrom.getDate() - 60);
+      dateFrom = formatDateToString(dateFrom);
+      break;
+    case '90days':
+      dateFrom = new Date(today);
+      dateFrom.setDate(dateFrom.getDate() - 90);
+      dateFrom = formatDateToString(dateFrom);
+      break;
+    case '1year':
+      dateFrom = new Date(today);
+      dateFrom.setFullYear(dateFrom.getFullYear() - 1);
+      dateFrom = formatDateToString(dateFrom);
+      break;
+    case 'custom':
+      // Use provided startDate and endDate
+      dateFrom = startDate || null;
+      dateTo = endDate || formatDateToString(today);
+      break;
+    default:
+      // If no shortcut but dates provided, use them directly
+      if (startDate || endDate) {
+        dateFrom = startDate || null;
+        dateTo = endDate || formatDateToString(today);
+      }
+      break;
+  }
+
+  return { dateFrom, dateTo };
+};
+
+const parseIdParam = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const parseSelectedDateRange = (value) => {
+  if (!value || typeof value !== 'string') {
+    return { dateFrom: null, dateTo: null };
+  }
+
+  const parts = value.split(' - ');
+  if (parts.length !== 2) {
+    return { dateFrom: null, dateTo: null };
+  }
+
+  const dateFrom = parts[0].trim();
+  const dateTo = parts[1].trim();
+
+  return {
+    dateFrom: dateFrom || null,
+    dateTo: dateTo || null,
+  };
+};
+
+const resolveReceivableFilters = (payload = {}) => {
+  const legacyDateRange = parseSelectedDateRange(payload.selecteddaterange);
+  const dateRange =
+    legacyDateRange.dateFrom || legacyDateRange.dateTo
+      ? legacyDateRange
+      : getDateRangeFromFilter(payload.dateFilter, payload.startDate, payload.endDate);
+
+  return {
+    syid: parseIdParam(payload.syid ?? payload.selectedschoolyear),
+    semid: parseIdParam(payload.semid ?? payload.selectedsemester),
+    programId: parseIdParam(payload.programId ?? payload.selecteddepartment),
+    levelId: parseIdParam(payload.levelId ?? payload.selectedgradelevel),
+    sectionId: parseIdParam(payload.sectionId ?? payload.selectedsection),
+    granteeId: parseIdParam(payload.granteeId ?? payload.selectedgrantee),
+    modeId: parseIdParam(payload.modeId ?? payload.selectedmode),
+    search: payload.search || null,
+    page: payload.page,
+    perPage: payload.perPage,
+    dateRange,
+  };
+};
+
 // ============================================================================
 // FINANCE V1 STUDLEDGER-BASED CALCULATION
-// Based on StatementofAccountController.php logic
+// Based on AccountsReceivableModel.php logic
 // ============================================================================
 
 /**
  * Calculate student totals directly from studledger table (finance_v1 approach)
- * This mirrors the PHP StatementofAccountController.php logic where:
- * - balance = SUM(amount) - SUM(payment) from studledger where void=0 and deleted=0
+ * This mirrors the PHP AccountsReceivableModel.php logic where:
+ * - totalassessment = SUM(amount) from studledger
+ * - discount = SUM(payment) WHERE particulars LIKE '%DISCOUNT:%'
+ * - totalpayment = SUM(payment) WHERE particulars NOT LIKE '%DISCOUNT:%'
+ * - netassessed = totalassessment - discount
+ * - balance = netassessed - totalpayment
+ *
+ * @param {object} dateRange - Optional { dateFrom, dateTo } for filtering by createddatetime
  */
-const calculateStudentTotalsFromLedger = async (db, student, syid, semid, schoolInfo) => {
+const calculateStudentTotalsFromLedger = async (db, student, syid, semid, schoolInfo, dateRange = {}) => {
   if (!syid) {
     return {
       total_fees: 0,
+      discount: 0,
+      net_assessed: 0,
       total_paid: 0,
       balance: 0,
       overpayment: 0,
@@ -51,37 +170,43 @@ const calculateStudentTotalsFromLedger = async (db, student, syid, semid, school
     const params = [student.id, syid];
     let query = `
       SELECT
-        SUM(CASE WHEN void = 0 THEN amount ELSE 0 END) as total_amount,
-        SUM(CASE WHEN void = 0 THEN payment ELSE 0 END) as total_payment
+        SUM(amount) as total_amount,
+        SUM(CASE WHEN particulars LIKE '%DISCOUNT:%' THEN payment ELSE 0 END) as total_discount,
+        SUM(CASE WHEN particulars NOT LIKE '%DISCOUNT:%' THEN payment ELSE 0 END) as total_payment
       FROM studledger
       WHERE studid = ? AND syid = ? AND deleted = 0
     `;
 
-    // Apply semester filter based on level (same logic as PHP)
-    if (student.levelid === 14 || student.levelid === 15) {
-      // SHS: check shssetup flag
-      if (schoolInfo && schoolInfo.shssetup === 0 && semid) {
-        query += ' AND semid = ?';
-        params.push(semid);
-      }
-    } else if (student.levelid >= 17 && student.levelid <= 25) {
-      // College: always filter by semester
-      if (semid) {
-        query += ' AND semid = ?';
-        params.push(semid);
-      }
+    if (semid !== null && semid !== undefined) {
+      query += ' AND semid = ?';
+      params.push(semid);
     }
-    // For basic education (levelid 1-13), no semester filter needed
+
+    // Apply date range filter (matches PHP: filter by createddatetime)
+    const { dateFrom, dateTo } = dateRange;
+    if (dateFrom) {
+      query += ' AND createddatetime >= ?';
+      params.push(dateFrom);
+    }
+    if (dateTo) {
+      query += ' AND createddatetime <= ?';
+      params.push(dateTo);
+    }
 
     const [rows] = await db.execute(query, params);
     const totalAmount = toNumber(rows[0]?.total_amount);
+    const totalDiscount = toNumber(rows[0]?.total_discount);
     const totalPayment = toNumber(rows[0]?.total_payment);
 
-    const balance = Math.max(totalAmount - totalPayment, 0);
-    const overpayment = Math.max(totalPayment - totalAmount, 0);
+    // Match PHP logic: netassessed = totalassessment - discount, balance = netassessed - totalpayment
+    const netAssessed = totalAmount - totalDiscount;
+    const balance = netAssessed - totalPayment;
+    const overpayment = Math.max(totalPayment - netAssessed, 0);
 
     return {
       total_fees: Number(totalAmount.toFixed(2)),
+      discount: Number(totalDiscount.toFixed(2)),
+      net_assessed: Number(netAssessed.toFixed(2)),
       total_paid: Number(totalPayment.toFixed(2)),
       balance: Number(balance.toFixed(2)),
       overpayment: Number(overpayment.toFixed(2)),
@@ -90,6 +215,8 @@ const calculateStudentTotalsFromLedger = async (db, student, syid, semid, school
     // Return zeros if query fails
     return {
       total_fees: 0,
+      discount: 0,
+      net_assessed: 0,
       total_paid: 0,
       balance: 0,
       overpayment: 0,
@@ -122,8 +249,17 @@ const hasStudledgerEntries = async (db, studid, syid) => {
 /**
  * Get all student balances from studledger in a single bulk query
  * This is much faster than querying per-student
+ *
+ * IMPORTANT: Matches PHP AccountsReceivableModel logic:
+ * - totalassessment = SUM(amount) from studledger
+ * - discount = SUM(payment) WHERE particulars LIKE '%DISCOUNT:%'
+ * - totalpayment = SUM(payment) WHERE particulars NOT LIKE '%DISCOUNT:%'
+ * - netassessed = totalassessment - discount
+ * - balance = netassessed - totalpayment
+ *
+ * @param {object} dateRange - Optional { dateFrom, dateTo } for filtering by createddatetime
  */
-const getBulkStudentBalancesFromLedger = async (db, studentIds, syid, semid, schoolInfo) => {
+const getBulkStudentBalancesFromLedger = async (db, studentIds, syid, semid, schoolInfo, dateRange = {}) => {
   if (!studentIds.length || !syid) {
     return new Map();
   }
@@ -133,17 +269,32 @@ const getBulkStudentBalancesFromLedger = async (db, studentIds, syid, semid, sch
     const params = [...studentIds, syid];
 
     // Base query - get totals grouped by student
+    // Separates discounts from regular payments based on particulars field
     let query = `
       SELECT
         sl.studid,
-        SUM(CASE WHEN sl.void = 0 THEN sl.amount ELSE 0 END) as total_amount,
-        SUM(CASE WHEN sl.void = 0 THEN sl.payment ELSE 0 END) as total_payment
+        SUM(sl.amount) as total_amount,
+        SUM(CASE WHEN sl.particulars LIKE '%DISCOUNT:%' THEN sl.payment ELSE 0 END) as total_discount,
+        SUM(CASE WHEN sl.particulars NOT LIKE '%DISCOUNT:%' THEN sl.payment ELSE 0 END) as total_payment
       FROM studledger sl
       WHERE sl.studid IN (${placeholders}) AND sl.syid = ? AND sl.deleted = 0
     `;
 
-    // Note: Semester filtering would need to be applied per-student based on levelid
-    // For simplicity, we'll get all and filter in code, or skip semester filter here
+    if (semid !== null && semid !== undefined) {
+      query += ' AND sl.semid = ?';
+      params.push(semid);
+    }
+
+    // Apply date range filter (matches PHP: filter by createddatetime)
+    const { dateFrom, dateTo } = dateRange;
+    if (dateFrom) {
+      query += ' AND sl.createddatetime >= ?';
+      params.push(dateFrom);
+    }
+    if (dateTo) {
+      query += ' AND sl.createddatetime <= ?';
+      params.push(dateTo);
+    }
 
     query += ' GROUP BY sl.studid';
 
@@ -152,12 +303,18 @@ const getBulkStudentBalancesFromLedger = async (db, studentIds, syid, semid, sch
     const balanceMap = new Map();
     for (const row of rows) {
       const totalAmount = toNumber(row.total_amount);
+      const totalDiscount = toNumber(row.total_discount);
       const totalPayment = toNumber(row.total_payment);
-      const balance = Math.max(totalAmount - totalPayment, 0);
-      const overpayment = Math.max(totalPayment - totalAmount, 0);
+
+      // Match PHP logic: netassessed = totalassessment - discount, balance = netassessed - totalpayment
+      const netAssessed = totalAmount - totalDiscount;
+      const balance = netAssessed - totalPayment;
+      const overpayment = Math.max(totalPayment - netAssessed, 0);
 
       balanceMap.set(row.studid, {
         total_fees: Number(totalAmount.toFixed(2)),
+        discount: Number(totalDiscount.toFixed(2)),
+        net_assessed: Number(netAssessed.toFixed(2)),
         total_paid: Number(totalPayment.toFixed(2)),
         balance: Number(balance.toFixed(2)),
         overpayment: Number(overpayment.toFixed(2)),
@@ -173,8 +330,9 @@ const getBulkStudentBalancesFromLedger = async (db, studentIds, syid, semid, sch
 
 /**
  * Optimized function to get students with their balances in minimal queries
+ * @param {object} dateRange - Optional { dateFrom, dateTo } for filtering by createddatetime
  */
-const getStudentsWithBalancesBulk = async (db, students, syid, semid, schoolInfo) => {
+const getStudentsWithBalancesBulk = async (db, students, syid, semid, schoolInfo, dateRange = {}) => {
   if (!students.length) {
     return [];
   }
@@ -182,22 +340,19 @@ const getStudentsWithBalancesBulk = async (db, students, syid, semid, schoolInfo
   const studentIds = students.map((s) => s.id);
 
   // Get all balances in one query
-  const balanceMap = await getBulkStudentBalancesFromLedger(db, studentIds, syid, semid, schoolInfo);
+  const balanceMap = await getBulkStudentBalancesFromLedger(db, studentIds, syid, semid, schoolInfo, dateRange);
 
   // Merge student data with balances
   const result = [];
   for (const student of students) {
     const totals = balanceMap.get(student.id) || {
       total_fees: 0,
+      discount: 0,
+      net_assessed: 0,
       total_paid: 0,
       balance: 0,
       overpayment: 0,
     };
-
-    // Skip students with no fees
-    if (totals.total_fees <= 0) {
-      continue;
-    }
 
     const fullName = [student.lastname, student.firstname, student.middlename]
       .filter(Boolean)
@@ -290,7 +445,7 @@ const getBalForwardClassId = async (db) => {
  */
 const getAcademicPrograms = async (db) => {
   const [rows] = await db.execute(
-    'SELECT id, progname FROM academicprogram ORDER BY id'
+    'SELECT id, progname, acadprogcode FROM academicprogram ORDER BY id'
   );
   return rows;
 };
@@ -303,6 +458,56 @@ const getGradeLevels = async (db) => {
     'SELECT id, levelname, acadprogid FROM gradelevel WHERE deleted = 0 ORDER BY levelname'
   );
   return rows;
+};
+
+const getGrantees = async (db) => {
+  const [rows] = await db.execute(
+    'SELECT id, description FROM grantee ORDER BY description'
+  );
+  return rows;
+};
+
+const getModesOfLearning = async (db) => {
+  const [rows] = await db.execute(
+    'SELECT id, description FROM modeoflearning WHERE deleted = 0 ORDER BY description'
+  );
+  return rows;
+};
+
+const getSectionsByLevel = async (db, levelId) => {
+  if (!levelId) {
+    return [];
+  }
+
+  const [levelRows] = await db.execute(
+    `SELECT ap.acadprogcode
+     FROM gradelevel gl
+     JOIN academicprogram ap ON gl.acadprogid = ap.id
+     WHERE gl.id = ?
+     LIMIT 1`,
+    [levelId]
+  );
+  const acadProgCode = (levelRows[0]?.acadprogcode || '').toLowerCase();
+
+  if (acadProgCode === 'college') {
+    const [sections] = await db.execute(
+      `SELECT id, sectionDesc as sectionname
+       FROM college_sections
+       WHERE yearID = ? AND deleted = 0
+       ORDER BY sectionDesc`,
+      [levelId]
+    );
+    return sections;
+  }
+
+  const [sections] = await db.execute(
+    `SELECT id, sectionname
+     FROM sections
+     WHERE levelid = ? AND deleted = 0
+     ORDER BY sectionname`,
+    [levelId]
+  );
+  return sections;
 };
 
 /**
@@ -708,76 +913,24 @@ const fetchStudentPayments = async (db, student, syid, semid, balClassId) => {
 
 /**
  * Calculate student totals (master calculation function)
- * For Finance V1: Uses studledger-based calculation by default (matching StatementofAccountController.php)
- * Falls back to tuition-based calculation if no ledger entries exist
+ * For Finance V1: Uses studledger-based calculation only (matching AccountsReceivableModel.php)
+ *
+ * @param {object} dateRange - Optional { dateFrom, dateTo } for filtering by createddatetime
  */
-const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balClassId) => {
+const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balClassId, dateRange = {}) => {
   if (!syid) {
     return {
       total_fees: 0,
+      discount: 0,
+      net_assessed: 0,
       total_paid: 0,
       balance: 0,
       overpayment: 0,
     };
   }
 
-  // Finance V1 approach: Check for studledger entries first
-  // This mirrors StatementofAccountController.php which uses studledger directly
-  const hasLedger = await hasStudledgerEntries(db, student.id, syid);
-  if (hasLedger) {
-    return calculateStudentTotalsFromLedger(db, student, syid, semid, schoolInfo);
-  }
-
-  // Fallback: Calculate from tuition setup if no ledger entries
-  const tuitionRows = await fetchTuitionFees(db, student, syid, semid, schoolInfo);
-  const totalsByClass = {};
-
-  let units = 0;
-  let subjectCount = 0;
-  const needsUnits = tuitionRows.some((row) => Number(row.istuition) === 1);
-  const needsSubjects = tuitionRows.some((row) => Number(row.persubj) === 1);
-
-  if (needsUnits) {
-    units = await getStudentUnits(db, student.id, syid, semid, student.levelid);
-  }
-  if (needsSubjects) {
-    subjectCount = await getStudentSubjectCount(db, student.id, syid, semid, student.levelid);
-  }
-
-  tuitionRows.forEach((row) => {
-    let amount = toNumber(row.amount);
-    if (Number(row.istuition) === 1 && units > 0) {
-      amount = amount * units;
-    } else if (Number(row.persubj) === 1 && subjectCount > 0) {
-      amount = amount * subjectCount;
-    }
-
-    if (amount <= 0) return;
-    totalsByClass[row.classid] = (totalsByClass[row.classid] || 0) + amount;
-  });
-
-  const discountedTotals = await applyDiscounts(db, student, syid, semid, totalsByClass);
-  const tuitionTotal = Object.values(discountedTotals).reduce(
-    (sum, value) => sum + toNumber(value),
-    0
-  );
-
-  const adjustmentCharges = await fetchAdjustmentCharges(db, student, syid, semid);
-  const bookEntries = await fetchBookEntries(db, student, syid, semid);
-  const oldAccounts = await fetchOldAccountCharges(db, student, syid, semid, balClassId);
-
-  const totalFees = tuitionTotal + adjustmentCharges + bookEntries + oldAccounts;
-  const totalPaid = await fetchStudentPayments(db, student, syid, semid, balClassId);
-
-  const balance = Math.max(totalFees - totalPaid, 0);
-  const overpayment = Math.max(totalPaid - totalFees, 0);
-
-  return {
-    total_fees: Number(totalFees.toFixed(2)),
-    total_paid: Number(totalPaid.toFixed(2)),
-    balance: Number(balance.toFixed(2)),
-    overpayment: Number(overpayment.toFixed(2)),
-  };
+  // Finance V1 approach: studledger-only calculation
+  return calculateStudentTotalsFromLedger(db, student, syid, semid, schoolInfo, dateRange);
 };
 
 // ============================================================================
@@ -786,9 +939,15 @@ const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balC
 
 /**
  * Build summary statistics from student totals
+ * Includes totals for assessment, discount, net assessed, payment, and
+ * assessment-based receivable totals to align with finance_v1 UI expectations.
  */
 const buildSummary = (studentsWithTotals) => {
   const summary = {
+    total_assessment: 0,
+    total_discount: 0,
+    total_net_assessed: 0,
+    total_payment: 0,
     total_receivable: 0,
     total_students: studentsWithTotals.length,
     students_with_balance: 0,
@@ -807,17 +966,29 @@ const buildSummary = (studentsWithTotals) => {
   ];
 
   studentsWithTotals.forEach((student) => {
-    const balance = toNumber(student.balance);
+    const totalFees = toNumber(student.total_fees);
+    const discount = toNumber(student.discount);
+    const netAssessed = toNumber(student.net_assessed);
+    const totalPaid = toNumber(student.total_paid);
     const overpayment = toNumber(student.overpayment);
 
-    if (balance > 0) {
-      summary.total_receivable += balance;
+    // Accumulate totals (matching PHP: overalltotalassessment, overalltotaldiscount, etc.)
+    summary.total_assessment += totalFees;
+    summary.total_discount += discount;
+    summary.total_net_assessed += netAssessed;
+    summary.total_payment += totalPaid;
+
+    const receivableAmount = totalFees;
+    summary.total_receivable += receivableAmount;
+    if (receivableAmount > 0) {
       summary.students_with_balance += 1;
 
-      const tier = tiers.find((item) => balance >= item.min && balance < item.max);
+      const tier = tiers.find(
+        (item) => receivableAmount >= item.min && receivableAmount < item.max
+      );
       if (tier) {
         tier.count += 1;
-        tier.total_balance += balance;
+        tier.total_balance += receivableAmount;
       }
     }
 
@@ -830,26 +1001,22 @@ const buildSummary = (studentsWithTotals) => {
     const programEntry = byProgram.get(programKey) || {
       program_id: student.acadprog_id || null,
       program_name: student.program_name || 'Unknown Program',
-      total_receivable: 0,
-      students_with_balance: 0,
+      total_balance: 0,
+      student_count: 0,
     };
-    if (balance > 0) {
-      programEntry.total_receivable += balance;
-      programEntry.students_with_balance += 1;
-    }
+    programEntry.total_balance += receivableAmount;
+    programEntry.student_count += 1;
     byProgram.set(programKey, programEntry);
 
     const levelKey = student.levelid || 'unknown';
     const levelEntry = byGradeLevel.get(levelKey) || {
       level_id: student.levelid || null,
       level_name: student.level_name || 'Unknown Level',
-      total_receivable: 0,
-      students_with_balance: 0,
+      total_balance: 0,
+      student_count: 0,
     };
-    if (balance > 0) {
-      levelEntry.total_receivable += balance;
-      levelEntry.students_with_balance += 1;
-    }
+    levelEntry.total_balance += receivableAmount;
+    levelEntry.student_count += 1;
     byGradeLevel.set(levelKey, levelEntry);
   });
 
@@ -858,24 +1025,36 @@ const buildSummary = (studentsWithTotals) => {
       ? summary.total_receivable / summary.students_with_balance
       : 0;
 
+  summary.total_assessment = Number(summary.total_assessment.toFixed(2));
+  summary.total_discount = Number(summary.total_discount.toFixed(2));
+  summary.total_net_assessed = Number(summary.total_net_assessed.toFixed(2));
+  summary.total_payment = Number(summary.total_payment.toFixed(2));
   summary.total_receivable = Number(summary.total_receivable.toFixed(2));
   summary.average_balance = Number(summary.average_balance.toFixed(2));
   summary.total_overpayment = Number(summary.total_overpayment.toFixed(2));
 
+  const programData = Array.from(byProgram.values()).map((entry) => ({
+    ...entry,
+    total_balance: Number(entry.total_balance.toFixed(2)),
+    avg_balance:
+      entry.student_count > 0
+        ? Number((entry.total_balance / entry.student_count).toFixed(2))
+        : 0,
+  }));
+
+  const gradeLevelData = Array.from(byGradeLevel.values()).map((entry) => ({
+    ...entry,
+    total_balance: Number(entry.total_balance.toFixed(2)),
+    avg_balance:
+      entry.student_count > 0
+        ? Number((entry.total_balance / entry.student_count).toFixed(2))
+        : 0,
+  }));
+
   return {
     summary,
-    byProgram: Array.from(byProgram.values())
-      .sort((a, b) => b.total_receivable - a.total_receivable)
-      .map((item) => ({
-        ...item,
-        total_receivable: Number(item.total_receivable.toFixed(2)),
-      })),
-    byGradeLevel: Array.from(byGradeLevel.values())
-      .sort((a, b) => b.total_receivable - a.total_receivable)
-      .map((item) => ({
-        ...item,
-        total_receivable: Number(item.total_receivable.toFixed(2)),
-      })),
+    byProgram: programData,
+    byGradeLevel: gradeLevelData,
     balanceTiers: tiers.map((tier) => ({
       ...tier,
       total_balance: Number(tier.total_balance.toFixed(2)),
@@ -886,66 +1065,166 @@ const buildSummary = (studentsWithTotals) => {
 /**
  * Fetch students with filters
  */
-const fetchStudents = async (db, { syid, semid, programId, levelId, search }) => {
-  const enrolledIds = await getEnrolledStudentIds(
-    db,
-    syid,
-    semid,
-    programId ? Number(programId) : null
-  );
-
-  let query = `
-    SELECT
-      si.id,
-      si.sid,
-      si.firstname,
-      si.middlename,
-      si.lastname,
-      si.levelid,
-      si.courseid,
-      si.strandid,
-      si.feesid,
-      gl.levelname as level_name,
-      gl.acadprogid as acadprog_id,
-      ap.progname as program_name
-    FROM studinfo si
-    LEFT JOIN gradelevel gl ON gl.id = si.levelid
-    LEFT JOIN academicprogram ap ON ap.id = gl.acadprogid
-    WHERE si.deleted = 0
-  `;
-
-  const params = [];
-
-  if (programId) {
-    query += ' AND gl.acadprogid = ?';
-    params.push(programId);
-  }
-
-  if (levelId) {
-    query += ' AND si.levelid = ?';
-    params.push(levelId);
-  }
-
-  if (enrolledIds && enrolledIds.length > 0) {
-    const placeholders = enrolledIds.map(() => '?').join(',');
-    query += ` AND si.id IN (${placeholders})`;
-    params.push(...enrolledIds);
-  } else if (enrolledIds && enrolledIds.length === 0) {
+const fetchStudents = async (db, { syid, semid, programId, levelId, sectionId, granteeId, modeId, search }) => {
+  if (!syid) {
     return [];
   }
 
-  if (search) {
-    query += ` AND (
-      si.sid LIKE ?
-      OR CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) LIKE ?
-    )`;
-    const searchTerm = `%${search}%`;
-    params.push(searchTerm, searchTerm);
+  const searchTerm = search ? `%${search}%` : null;
+  const searchClause = search
+    ? ` AND (
+        si.sid LIKE ?
+        OR CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) LIKE ?
+      )`
+    : '';
+  const searchParams = search ? [searchTerm, searchTerm] : [];
+
+  const [basicStudents] = await db.execute(
+    `
+      SELECT DISTINCT
+        si.id,
+        si.sid,
+        si.firstname,
+        si.middlename,
+        si.lastname,
+        s.id as section_id,
+        s.sectionname as section_name,
+        gl.id as levelid,
+        gl.levelname as level_name,
+        ap.id as acadprog_id,
+        ap.progname as program_name,
+        si.grantee as grantee_id,
+        si.mol as mol_id
+      FROM studinfo si
+      JOIN enrolledstud es ON si.id = es.studid
+      JOIN sections s ON si.sectionid = s.id
+      JOIN gradelevel gl ON s.levelid = gl.id
+      JOIN academicprogram ap ON gl.acadprogid = ap.id
+      WHERE s.deleted = 0
+        AND si.deleted = 0
+        AND es.deleted = 0
+        AND si.studstatus <> 0
+        AND es.syid = ?
+        ${searchClause}
+    `,
+    [syid, ...searchParams]
+  );
+
+  let shsStudents = [];
+  if (semid) {
+    [shsStudents] = await db.execute(
+      `
+        SELECT DISTINCT
+          si.id,
+          si.sid,
+          si.firstname,
+          si.middlename,
+          si.lastname,
+          s.id as section_id,
+          s.sectionname as section_name,
+          gl.id as levelid,
+          gl.levelname as level_name,
+          ap.id as acadprog_id,
+          ap.progname as program_name,
+          si.grantee as grantee_id,
+          si.mol as mol_id
+        FROM studinfo si
+        JOIN sh_enrolledstud sh ON si.id = sh.studid
+        JOIN sections s ON si.sectionid = s.id
+        JOIN gradelevel gl ON s.levelid = gl.id
+        JOIN academicprogram ap ON gl.acadprogid = ap.id
+        WHERE s.deleted = 0
+          AND si.deleted = 0
+          AND sh.deleted = 0
+          AND si.studstatus <> 0
+          AND sh.syid = ?
+          AND sh.semid = ?
+          ${searchClause}
+      `,
+      [syid, semid, ...searchParams]
+    );
   }
 
-  query += ' ORDER BY si.lastname, si.firstname';
+  let collegeStudents = [];
+  if (semid) {
+    [collegeStudents] = await db.execute(
+      `
+        SELECT DISTINCT
+          si.id,
+          si.sid,
+          si.firstname,
+          si.middlename,
+          si.lastname,
+          cs.id as section_id,
+          cs.sectionDesc as section_name,
+          gl.id as levelid,
+          gl.levelname as level_name,
+          ap.id as acadprog_id,
+          ap.progname as program_name,
+          si.grantee as grantee_id,
+          si.mol as mol_id
+        FROM studinfo si
+        JOIN college_enrolledstud ce ON si.id = ce.studid
+        JOIN college_sections cs ON ce.sectionID = cs.id
+        JOIN gradelevel gl ON cs.yearID = gl.id
+        JOIN academicprogram ap ON gl.acadprogid = ap.id
+        WHERE cs.deleted = 0
+          AND si.deleted = 0
+          AND ce.deleted = 0
+          AND si.studstatus <> 0
+          AND ce.syid = ?
+          AND ce.semid = ?
+          ${searchClause}
+      `,
+      [syid, semid, ...searchParams]
+    );
+  }
 
-  const [students] = await db.execute(query, params);
+  const uniqueStudents = new Map();
+  [...basicStudents, ...shsStudents, ...collegeStudents].forEach((student) => {
+    if (!uniqueStudents.has(student.id)) {
+      uniqueStudents.set(student.id, student);
+    }
+  });
+
+  let students = Array.from(uniqueStudents.values());
+
+  if (programId) {
+    const programValue = Number(programId);
+    students = students.filter((student) => Number(student.acadprog_id) === programValue);
+  }
+
+  if (levelId) {
+    const levelValue = Number(levelId);
+    students = students.filter((student) => Number(student.levelid) === levelValue);
+  }
+
+  if (sectionId) {
+    const sectionValue = Number(sectionId);
+    students = students.filter((student) => Number(student.section_id) === sectionValue);
+  }
+
+  if (granteeId) {
+    const granteeValue = Number(granteeId);
+    students = students.filter((student) => Number(student.grantee_id) === granteeValue);
+  }
+
+  if (modeId) {
+    const modeValue = Number(modeId);
+    students = students.filter((student) => Number(student.mol_id) === modeValue);
+  }
+
+  students.sort((a, b) => {
+    const lastA = a.lastname || '';
+    const lastB = b.lastname || '';
+    if (lastA !== lastB) {
+      return lastA.localeCompare(lastB);
+    }
+    const firstA = a.firstname || '';
+    const firstB = b.firstname || '';
+    return firstA.localeCompare(firstB);
+  });
+
   return students;
 };
 
@@ -983,10 +1262,8 @@ const buildSyComparison = async (db, options) => {
         continue;
       }
 
-      if (totals.balance > 0) {
-        totalReceivable += totals.balance;
-        studentsWithBalance += 1;
-      }
+      totalReceivable += Number(totals.total_fees) || 0;
+      studentsWithBalance += 1;
     }
 
     comparison.push({
@@ -1018,9 +1295,11 @@ export const getAccountReceivableFilters = async (req, res) => {
     }
 
     const db = await getSchoolConnection(schoolDbConfig);
-    const [programs, gradeLevels] = await Promise.all([
+    const [programs, gradeLevels, grantees, modes] = await Promise.all([
       getAcademicPrograms(db),
       getGradeLevels(db),
+      getGrantees(db),
+      getModesOfLearning(db),
     ]);
     await db.end();
 
@@ -1029,6 +1308,8 @@ export const getAccountReceivableFilters = async (req, res) => {
       data: {
         programs,
         gradeLevels,
+        grantees,
+        modes,
       },
     });
   } catch (error) {
@@ -1042,11 +1323,11 @@ export const getAccountReceivableFilters = async (req, res) => {
 };
 
 /**
- * Get Account Receivables summary statistics (OPTIMIZED with bulk queries)
+ * Get sections for Account Receivables filters based on grade level
  */
-export const getAccountReceivableSummary = async (req, res) => {
+export const getAccountReceivableSections = async (req, res) => {
   try {
-    const { schoolDbConfig, syid, semid, programId, levelId } = req.body;
+    const { schoolDbConfig, levelId } = req.body;
 
     if (!schoolDbConfig) {
       return res.status(400).json({
@@ -1055,7 +1336,53 @@ export const getAccountReceivableSummary = async (req, res) => {
       });
     }
 
-    if (!syid) {
+    if (!levelId) {
+      return res.status(200).json({
+        status: 'success',
+        data: [],
+      });
+    }
+
+    const db = await getSchoolConnection(schoolDbConfig);
+    const sections = await getSectionsByLevel(db, Number(levelId));
+    await db.end();
+
+    res.status(200).json({
+      status: 'success',
+      data: sections,
+    });
+  } catch (error) {
+    console.error('Error fetching receivables sections:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch receivables sections',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Get Account Receivables summary statistics (OPTIMIZED with bulk queries)
+ *
+ * Date filter options:
+ * - dateFilter: '30days', '60days', '90days', '1year', 'custom'
+ * - startDate: YYYY-MM-DD (used when dateFilter is 'custom' or not specified)
+ * - endDate: YYYY-MM-DD (used when dateFilter is 'custom' or not specified)
+ */
+export const getAccountReceivableSummary = async (req, res) => {
+  try {
+    const { schoolDbConfig } = req.body;
+
+    if (!schoolDbConfig) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'School database configuration is required',
+      });
+    }
+
+    const filters = resolveReceivableFilters(req.body);
+
+    if (!filters.syid) {
       return res.status(400).json({
         status: 'error',
         message: 'School year is required',
@@ -1066,10 +1393,13 @@ export const getAccountReceivableSummary = async (req, res) => {
     const schoolInfo = await getSchoolInfo(db);
 
     const students = await fetchStudents(db, {
-      syid: Number(syid),
-      semid: semid ? Number(semid) : null,
-      programId: programId ? Number(programId) : null,
-      levelId: levelId ? Number(levelId) : null,
+      syid: filters.syid,
+      semid: filters.semid,
+      programId: filters.programId,
+      levelId: filters.levelId,
+      sectionId: filters.sectionId,
+      granteeId: filters.granteeId,
+      modeId: filters.modeId,
       search: null,
     });
 
@@ -1077,9 +1407,10 @@ export const getAccountReceivableSummary = async (req, res) => {
     const studentsWithTotals = await getStudentsWithBalancesBulk(
       db,
       students,
-      Number(syid),
-      semid ? Number(semid) : null,
-      schoolInfo
+      filters.syid,
+      filters.semid,
+      schoolInfo,
+      filters.dateRange
     );
 
     const aggregated = buildSummary(studentsWithTotals);
@@ -1095,6 +1426,7 @@ export const getAccountReceivableSummary = async (req, res) => {
       data: {
         ...aggregated,
         bySchoolYear,
+        appliedDateRange: filters.dateRange,
       },
     });
   } catch (error) {
@@ -1109,19 +1441,15 @@ export const getAccountReceivableSummary = async (req, res) => {
 
 /**
  * Get Account Receivables detailed list
+ *
+ * Date filter options:
+ * - dateFilter: '30days', '60days', '90days', '1year', 'custom'
+ * - startDate: YYYY-MM-DD (used when dateFilter is 'custom' or not specified)
+ * - endDate: YYYY-MM-DD (used when dateFilter is 'custom' or not specified)
  */
 export const getAccountReceivableList = async (req, res) => {
   try {
-    const {
-      schoolDbConfig,
-      syid,
-      semid,
-      programId,
-      levelId,
-      search,
-      page = 1,
-      perPage = 200,
-    } = req.body;
+    const { schoolDbConfig } = req.body;
 
     if (!schoolDbConfig) {
       return res.status(400).json({
@@ -1130,7 +1458,11 @@ export const getAccountReceivableList = async (req, res) => {
       });
     }
 
-    if (!syid) {
+    const filters = resolveReceivableFilters(req.body);
+    const page = filters.page ?? 1;
+    const perPage = filters.perPage ?? 200;
+
+    if (!filters.syid) {
       return res.status(400).json({
         status: 'error',
         message: 'School year is required',
@@ -1138,50 +1470,61 @@ export const getAccountReceivableList = async (req, res) => {
     }
 
     const db = await getSchoolConnection(schoolDbConfig);
-    const [schoolInfo, balClassId] = await Promise.all([
-      getSchoolInfo(db),
-      getBalForwardClassId(db),
-    ]);
+    const schoolInfo = await getSchoolInfo(db);
 
     const students = await fetchStudents(db, {
-      syid: Number(syid),
-      semid: semid ? Number(semid) : null,
-      programId: programId ? Number(programId) : null,
-      levelId: levelId ? Number(levelId) : null,
-      search: search || null,
+      syid: filters.syid,
+      semid: filters.semid,
+      programId: filters.programId,
+      levelId: filters.levelId,
+      sectionId: filters.sectionId,
+      granteeId: filters.granteeId,
+      modeId: filters.modeId,
+      search: filters.search,
     });
 
-    const studentsWithTotals = [];
-    for (const student of students) {
-      const totals = await calculateStudentTotals(
-        db,
-        student,
-        Number(syid),
-        semid ? Number(semid) : null,
-        schoolInfo,
-        balClassId
-      );
+    const studentsWithTotals = await getStudentsWithBalancesBulk(
+      db,
+      students,
+      filters.syid,
+      filters.semid,
+      schoolInfo,
+      filters.dateRange
+    );
 
-      if (Number(totals.total_fees) <= 0) {
-        continue;
-      }
+    const listRows = studentsWithTotals.map((student) => {
+      const lastName = student.lastname || '';
+      const firstMiddle = [student.firstname, student.middlename].filter(Boolean).join(' ');
+      const fullName =
+        student.full_name ||
+        [lastName, firstMiddle].filter(Boolean).join(', ').trim() ||
+        student.sid ||
+        'Unknown';
 
-      studentsWithTotals.push({
+      return {
         id: student.id,
         sid: student.sid,
-        name: `${student.lastname}, ${student.firstname} ${student.middlename || ''}`.trim(),
+        full_name: fullName,
+        name: fullName,
         level_name: student.level_name,
         program_name: student.program_name,
-        total_fees: totals.total_fees,
-        total_paid: totals.total_paid,
-        balance: totals.balance,
-        overpayment: totals.overpayment,
-      });
-    }
+        total_fees: student.total_fees,
+        discount: student.discount,
+        net_assessed: student.net_assessed,
+        total_paid: student.total_paid,
+        balance: student.balance,
+        overpayment: student.overpayment,
+      };
+    });
 
-    const startIndex = (Number(page) - 1) * Number(perPage);
-    const endIndex = startIndex + Number(perPage);
-    const paginatedStudents = studentsWithTotals.slice(startIndex, endIndex);
+    const pageSize = Number(perPage);
+    const usePaging = Number.isFinite(pageSize) && pageSize > 0;
+    const currentPage = usePaging ? Math.max(1, Number(page) || 1) : 1;
+    const startIndex = usePaging ? (currentPage - 1) * pageSize : 0;
+    const endIndex = usePaging ? startIndex + pageSize : listRows.length;
+    const paginatedStudents = usePaging ? listRows.slice(startIndex, endIndex) : listRows;
+    const pageCount = usePaging ? Math.max(1, Math.ceil(listRows.length / pageSize)) : 1;
+    const perPageValue = usePaging ? pageSize : listRows.length;
 
     await db.end();
 
@@ -1189,10 +1532,11 @@ export const getAccountReceivableList = async (req, res) => {
       status: 'success',
       data: paginatedStudents,
       meta: {
-        total: studentsWithTotals.length,
-        page: Number(page),
-        per_page: Number(perPage),
-        pages: Math.ceil(studentsWithTotals.length / Number(perPage)),
+        total: listRows.length,
+        page: currentPage,
+        per_page: perPageValue,
+        pages: pageCount,
+        appliedDateRange: filters.dateRange,
       },
     });
   } catch (error) {

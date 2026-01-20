@@ -41,6 +41,7 @@ import {
 } from '../controllers/summaryController.js';
 import {
   getAccountReceivableFilters as getFinanceV1ReceivableFilters,
+  getAccountReceivableSections as getFinanceV1ReceivableSections,
   getAccountReceivableSummary as getFinanceV1ReceivableSummary,
   getAccountReceivableList as getFinanceV1ReceivableList,
   getCashierSummary as getFinanceV1CashierSummary,
@@ -328,6 +329,9 @@ router.post(
 // Finance V1 - Accounts Receivable Routes (all require authentication)
 // POST /api/admin/finance-v1/receivables/filters - Get account receivables filters
 router.post('/finance-v1/receivables/filters', verifyToken, getFinanceV1ReceivableFilters);
+
+// POST /api/admin/finance-v1/receivables/sections - Get account receivables sections
+router.post('/finance-v1/receivables/sections', verifyToken, getFinanceV1ReceivableSections);
 
 // POST /api/admin/finance-v1/receivables/summary - Get account receivables summary
 router.post('/finance-v1/receivables/summary', verifyToken, getFinanceV1ReceivableSummary);
