@@ -4,6 +4,7 @@ import {
   getEmployeeById,
   getUserTypes,
 } from '../controllers/employeeController.js';
+import { getDashboardData } from '../controllers/dashboardController.js';
 import {
   getAllMemos,
   getMemoById,
@@ -136,6 +137,10 @@ const routeFinance = (v2Handler, v1Handler) => async (req, res, next) => {
 
   return v2Handler(req, res, next);
 };
+
+// Dashboard Routes (all require authentication)
+// POST /api/admin/dashboard - Get comprehensive dashboard data
+router.post('/dashboard', verifyToken, getDashboardData);
 
 // Employee Profile Routes (all require authentication)
 // POST /api/admin/employees - Get all employees (POST to send school db config)

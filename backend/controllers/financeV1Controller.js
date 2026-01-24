@@ -2716,3 +2716,94 @@ export const getYearlySummaryTable = async (req, res) => {
     });
   }
 };
+
+export const getFinanceV1ReceivableSummaryTotals = async ({
+  schoolDbConfig,
+  syid,
+  semid,
+  programId = null,
+  levelId = null,
+  sectionId = null,
+  granteeId = null,
+  modeId = null,
+  dateFilter = null,
+  startDate = null,
+  endDate = null,
+}) => {
+  if (!schoolDbConfig) {
+    throw new Error('School database configuration is required');
+  }
+
+  const filters = resolveReceivableFilters({
+    syid,
+    semid,
+    programId,
+    levelId,
+    sectionId,
+    granteeId,
+    modeId,
+    dateFilter,
+    startDate,
+    endDate,
+  });
+
+  if (!filters.syid) {
+    return {
+      summary: {
+        total_assessment: 0,
+        total_discount: 0,
+        total_net_assessed: 0,
+        total_payment: 0,
+        total_receivable: 0,
+        total_students: 0,
+        students_with_balance: 0,
+        average_balance: 0,
+        total_overpayment: 0,
+        overpaid_count: 0,
+      },
+      appliedDateRange: filters.dateRange,
+    };
+  }
+
+  let dbConnection = null;
+
+  try {
+    dbConnection = await getSchoolConnection(schoolDbConfig);
+    const schoolInfo = await getSchoolInfo(dbConnection);
+
+    const students = await fetchStudents(dbConnection, {
+      syid: filters.syid,
+      semid: filters.semid,
+      programId: filters.programId,
+      levelId: filters.levelId,
+      sectionId: filters.sectionId,
+      granteeId: filters.granteeId,
+      modeId: filters.modeId,
+      search: null,
+    });
+
+    const studentsWithTotals = await getStudentsWithBalancesBulk(
+      dbConnection,
+      students,
+      filters.syid,
+      filters.semid,
+      schoolInfo,
+      filters.dateRange
+    );
+
+    const aggregated = buildSummary(studentsWithTotals);
+    aggregated.appliedDateRange = filters.dateRange;
+    return aggregated;
+  } catch (error) {
+    console.error('Error computing finance v1 receivables summary:', error);
+    throw error;
+  } finally {
+    if (dbConnection) {
+      try {
+        await dbConnection.end();
+      } catch {
+        // Ignore close error
+      }
+    }
+  }
+};

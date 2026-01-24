@@ -1080,3 +1080,100 @@ export const getAccountReceivableSummary = async (req, res) => {
     });
   }
 };
+
+export const getAccountReceivableSummaryTotals = async ({
+  schoolDbConfig,
+  syid,
+  semid,
+  programId = null,
+  levelId = null,
+  search = null,
+  dateFilter = null,
+  startDate = null,
+  endDate = null,
+  useStudledger = false,
+}) => {
+  if (!schoolDbConfig) {
+    throw new Error('School database configuration is required');
+  }
+
+  const dateRange = getDateRangeFromFilter(dateFilter, startDate, endDate);
+
+  if (!syid) {
+    return {
+      summary: {
+        total_receivable: 0,
+        total_students: 0,
+        students_with_balance: 0,
+        average_balance: 0,
+        total_overpayment: 0,
+        overpaid_count: 0,
+      },
+      appliedDateRange: dateRange,
+    };
+  }
+
+  let dbConnection = null;
+
+  try {
+    dbConnection = await getSchoolConnection(schoolDbConfig);
+    const schoolInfo = await getSchoolInfo(dbConnection);
+    const balClassId = await getBalForwardClassId(dbConnection);
+
+    const students = await fetchStudents(dbConnection, {
+      syid,
+      semid,
+      programId: programId ? Number(programId) : null,
+      levelId: levelId ? Number(levelId) : null,
+      search: search || null,
+    });
+
+    if (!students.length) {
+      return {
+        summary: {
+          total_receivable: 0,
+          total_students: 0,
+          students_with_balance: 0,
+          average_balance: 0,
+          total_overpayment: 0,
+          overpaid_count: 0,
+        },
+        appliedDateRange: dateRange,
+      };
+    }
+
+    const studentsWithTotals = [];
+
+    for (const student of students) {
+      const totals = await calculateStudentTotals(
+        dbConnection,
+        student,
+        syid,
+        semid,
+        schoolInfo,
+        balClassId,
+        useStudledger,
+        dateRange
+      );
+      studentsWithTotals.push({
+        ...student,
+        ...totals,
+      });
+    }
+
+    const summaryData = buildSummary(studentsWithTotals);
+    summaryData.appliedDateRange = dateRange;
+    return summaryData;
+  } catch (error) {
+    console.error('Error computing account receivables summary:', error);
+    throw error;
+  } finally {
+    if (dbConnection) {
+      try {
+        await dbConnection.end();
+      } catch {
+        // Ignore close error
+      }
+    }
+  }
+};
