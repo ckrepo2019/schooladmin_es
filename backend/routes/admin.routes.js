@@ -4,6 +4,7 @@ import {
   getEmployeeById,
   getUserTypes,
 } from '../controllers/employeeController.js';
+import { getEmployeeAttendance } from '../controllers/employeeAttendanceController.js';
 import { getDashboardData } from '../controllers/dashboardController.js';
 import {
   getAllMemos,
@@ -151,6 +152,10 @@ router.post('/employees/:id', verifyToken, getEmployeeById);
 
 // POST /api/admin/user-types - Get all user types (POST to send school db config)
 router.post('/user-types', verifyToken, getUserTypes);
+
+// Employee Attendance Routes (all require authentication)
+// POST /api/admin/employee-attendance - Get employee attendance records
+router.post('/employee-attendance', verifyToken, getEmployeeAttendance);
 
 // Memo Board Routes (all require authentication)
 // POST /api/admin/memos - Get all memos

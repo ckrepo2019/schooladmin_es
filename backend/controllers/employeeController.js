@@ -224,17 +224,51 @@ export const getUserTypes = async (req, res) => {
     // Connect to school database
     connection = await getSchoolConnection(schoolDbConfig);
 
+    const availableColumns = new Set();
+    try {
+      const [columnRows] = await connection.execute(
+        `SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = ?
+           AND TABLE_NAME = 'usertype'`,
+        [schoolDbConfig.db_name]
+      );
+      for (const row of columnRows || []) {
+        if (row?.COLUMN_NAME) {
+          availableColumns.add(row.COLUMN_NAME);
+        }
+      }
+    } catch (schemaError) {
+      console.warn('Unable to probe usertype columns:', schemaError?.message || schemaError);
+    }
+
+    const selectParts = [
+      'id',
+      'utype',
+      availableColumns.has('departmentid') ? 'departmentid' : 'NULL as departmentid',
+      availableColumns.has('type_active') ? 'type_active' : 'NULL as type_active',
+      availableColumns.has('sortid') ? 'sortid' : 'NULL as sortid',
+    ];
+
+    const whereParts = [];
+    if (availableColumns.has('deleted')) {
+      whereParts.push('deleted = 0');
+    }
+    if (availableColumns.has('type_active')) {
+      whereParts.push('type_active = 1');
+    }
+    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+    const orderClause = availableColumns.has('sortid')
+      ? 'ORDER BY sortid ASC, utype ASC'
+      : 'ORDER BY utype ASC';
+
     // Get all active user types
     const [userTypes] = await connection.query(`
       SELECT
-        id,
-        utype,
-        departmentid,
-        type_active,
-        sortid
+        ${selectParts.join(',\n        ')}
       FROM usertype
-      WHERE deleted = 0 AND type_active = 1
-      ORDER BY sortid ASC, utype ASC
+      ${whereClause}
+      ${orderClause}
     `);
 
     await connection.end();

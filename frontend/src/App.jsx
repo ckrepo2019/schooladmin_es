@@ -11,6 +11,7 @@ import { AdminLayout } from '@/components/layout/AdminLayout'
 import SchoolSelection from '@/views/portals/admin/SchoolSelection'
 import AdminDashboard from '@/views/portals/admin/pages/Dashboard'
 import EmployeeProfile from '@/views/portals/admin/pages/EmployeeProfile'
+import EmployeeAttendance from '@/views/portals/admin/pages/EmployeeAttendance'
 import MemoBoard from '@/views/portals/admin/pages/MemoBoard'
 import AdminCalendar from '@/views/portals/admin/pages/Calendar'
 import AdminSettings from '@/views/portals/admin/pages/Settings'
@@ -105,7 +106,7 @@ function App() {
 
           {/* HR Reports */}
           <Route path="hr/employee-profile" element={<EmployeeProfile />} />
-          <Route path="hr/employee-attendance" element={<div className="p-6">Employee Attendance - Coming Soon</div>} />
+          <Route path="hr/employee-attendance" element={<EmployeeAttendance />} />
 
           {/* Registrar Reports */}
           <Route path="registrar/enrollment-summary" element={<EnrollmentSummary />} />
