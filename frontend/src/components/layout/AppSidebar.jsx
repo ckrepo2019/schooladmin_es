@@ -88,8 +88,7 @@ const getNavItems = (role) => {
         { title: 'Daily Cash Progress Report', url: '/admin/finance/daily-cash-progress' },
         { title: 'Monthly Summary', url: '/admin/finance/monthly-summary' },
         { title: 'Yearly Summary', url: '/admin/finance/yearly-summary' },
-        { title: 'Account Receivables', url: '/admin/finance/account-receivables' },
-        { title: 'Expenses Monitoring', url: '/admin/finance/expenses-monitoring' },
+        { title: 'Account Receivables', url: '/admin/finance/account-receivables' }
       ],
     },
     {
