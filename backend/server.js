@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'https://schooladmin.essentiel.ph';
+const CORS_ORIGIN = 'https://schooladmin.essentiel.ph';
 
 app.use(cors({
   origin: CORS_ORIGIN,
