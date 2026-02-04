@@ -18,10 +18,20 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const CORS_ORIGIN = 'https://schooladmin.essentiel.ph';
 
-app.use(cors({
+// CORS configuration
+const corsOptions = {
   origin: CORS_ORIGIN,
-  credentials: true, // Allow cookies
-}));
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  optionsSuccessStatus: 200
+};
+
+// Handle preflight requests explicitly
+app.options('*', cors(corsOptions));
+
+// Apply CORS to all routes
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 
